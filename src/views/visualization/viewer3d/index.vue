@@ -1721,62 +1721,66 @@ watch(
 
 <template>
   <div class="dd-page">
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <div class="flex gap-2 items-center flex-wrap">
-        <el-button type="primary" @click="uploadVisible = true">
-          上传模型
-        </el-button>
-        <el-select
-          v-model="selectedModelIds"
-          class="w-[320px]"
-          size="default"
-          :loading="modelListLoading"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          clearable
-          placeholder="选择一个或多个模型"
-          @change="onModelChanged"
+    <div class="mb-4 overflow-x-auto">
+      <div class="flex min-w-max items-center justify-between gap-4">
+        <div class="flex items-center gap-2 whitespace-nowrap">
+          <el-button type="primary" @click="uploadVisible = true">
+            上传模型
+          </el-button>
+          <el-select
+            v-model="selectedModelIds"
+            class="w-[200px]"
+            size="default"
+            :loading="modelListLoading"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            clearable
+            placeholder="选择一个或多个模型"
+            @change="onModelChanged"
+          >
+            <el-option
+              v-for="m in modelOptions"
+              :key="m.value"
+              :label="m.label"
+              :value="m.value"
+            />
+          </el-select>
+          <el-select
+            v-if="sceneModels.length > 0"
+            v-model="currentModel"
+            class="w-[200px]"
+            size="default"
+            placeholder="当前主模型"
+          >
+            <el-option
+              v-for="item in sceneModels"
+              :key="item.instanceId"
+              :label="item.modelName"
+              :value="item.instanceId"
+            />
+          </el-select>
+          <el-button
+            type="primary"
+            plain
+            :loading="projectSaving"
+            @click="saveCurrentProject"
+          >
+            保存到当前项目
+          </el-button>
+          <el-checkbox v-model="showStats" size="small">性能统计</el-checkbox>
+        </div>
+        <div
+          class="shrink-0 text-xs whitespace-nowrap text-[var(--el-text-color-secondary)]"
         >
-          <el-option
-            v-for="m in modelOptions"
-            :key="m.value"
-            :label="m.label"
-            :value="m.value"
-          />
-        </el-select>
-        <el-select
-          v-if="sceneModels.length > 0"
-          v-model="currentModel"
-          class="w-[220px]"
-          size="default"
-          placeholder="当前主模型"
-        >
-          <el-option
-            v-for="item in sceneModels"
-            :key="item.instanceId"
-            :label="item.modelName"
-            :value="item.instanceId"
-          />
-        </el-select>
-        <el-button
-          type="primary"
-          plain
-          :loading="projectSaving"
-          @click="saveCurrentProject"
-        >
-          保存到当前项目
-        </el-button>
-        <el-checkbox v-model="showStats" size="small">性能统计</el-checkbox>
-      </div>
-      <div class="text-xs text-[var(--el-text-color-secondary)]">
-        {{
-          projectLoading
-            ? "项目加载中..."
-            : projectRecord?.projectName
-              ? `当前项目：${projectRecord.projectName}`
-              : "未绑定项目"
-        }}
+          {{
+            projectLoading
+              ? "项目加载中..."
+              : projectRecord?.projectName
+                ? `当前项目：${projectRecord.projectName}`
+                : "未绑定项目"
+          }}
+        </div>
       </div>
     </div>
 
