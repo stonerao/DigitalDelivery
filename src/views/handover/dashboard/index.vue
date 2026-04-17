@@ -5,6 +5,7 @@ import { message } from "@/utils/message";
 import { useUserStoreHook } from "@/store/modules/user";
 import UploadDialog from "../components/UploadDialog.vue";
 import {
+  getDashboardStats,
   getHandoverDocuments,
   getHandoverKks,
   getHandoverModels,
@@ -24,24 +25,55 @@ const currentUser = computed(() => {
 });
 
 const refreshing = ref(false);
+const uploadDialogVisible = ref(false);
+
+const quickActions = [
+  {
+    key: "upload",
+    label: "快速上传",
+    type: "primary",
+    action: () => openUploadDialog()
+  },
+  {
+    key: "search",
+    label: "关联搜索",
+    action: () => router.push("/search-nav/search")
+  },
+  {
+    key: "viewer3d",
+    label: "三维浏览",
+    action: () => router.push("/visualization/3d-viewer")
+  },
+  {
+    key: "projects",
+    label: "项目管理",
+    action: () => router.push("/handover/projects")
+  }
+];
 
 const stats = ref([
   {
     value: 0,
     label: "文档数量",
-    changeText: "实时数据",
+    changeText: "持平",
     changeType: "success"
   },
   {
     value: 0,
     label: "三维模型",
-    changeText: "实时数据",
+    changeText: "持平",
     changeType: "success"
   },
   {
     value: 0,
     label: "设备编码",
-    changeText: "实时数据",
+    changeText: "持平",
+    changeType: "success"
+  },
+  {
+    value: 0,
+    label: "活跃项目",
+    changeText: "持平",
     changeType: "success"
   }
 ]);
@@ -55,6 +87,57 @@ function unwrapData(resp) {
 function toNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
+}
+
+function formatChange(rate) {
+  const ratio = toNumber(rate);
+  const percent = Math.abs(ratio * 100);
+  const formattedPercent = Number.isInteger(percent)
+    ? String(percent)
+    : percent.toFixed(2).replace(/\.?0+$/, "");
+
+  if (ratio > 0) {
+    return {
+      changeText: `较上期 +${formattedPercent}%`,
+      changeType: "success"
+    };
+  }
+  if (ratio < 0) {
+    return {
+      changeText: `较上期 -${formattedPercent}%`,
+      changeType: "danger"
+    };
+  }
+  return {
+    changeText: "较上期 持平",
+    changeType: "success"
+  };
+}
+
+function buildStatsCards(rawStats) {
+  const dashboardStats = rawStats || {};
+  return [
+    {
+      value: toNumber(dashboardStats.documentCount),
+      label: "文档数量",
+      ...formatChange(dashboardStats.documentChangeRate)
+    },
+    {
+      value: toNumber(dashboardStats.modelCount),
+      label: "三维模型",
+      ...formatChange(dashboardStats.modelChangeRate)
+    },
+    {
+      value: toNumber(dashboardStats.kksCount),
+      label: "设备编码",
+      ...formatChange(dashboardStats.kksChangeRate)
+    },
+    {
+      value: toNumber(dashboardStats.activeProjectCount),
+      label: "活跃项目",
+      ...formatChange(dashboardStats.activeProjectChangeRate)
+    }
+  ];
 }
 
 function toTimestamp(value) {
@@ -122,36 +205,19 @@ function buildRecentActivities(docRecords, modelRecords, kksRecords) {
 async function loadDashboardData(showSuccessMessage = false) {
   try {
     refreshing.value = true;
-    const [docRes, modelRes, kksRes] = await Promise.all([
+    const [statsRes, docRes, modelRes, kksRes] = await Promise.all([
+      getDashboardStats(),
       getHandoverDocuments({ page: 1, size: 5 }),
       getHandoverModels({ page: 1, size: 5 }),
       getHandoverKks({ page: 1, size: 5 })
     ]);
 
+    const statsData = unwrapData(statsRes);
     const docData = unwrapData(docRes);
     const modelData = unwrapData(modelRes);
     const kksData = unwrapData(kksRes);
 
-    stats.value = [
-      {
-        value: toNumber(docData.total),
-        label: "文档数量",
-        changeText: "实时数据",
-        changeType: "success"
-      },
-      {
-        value: toNumber(modelData.total),
-        label: "三维模型",
-        changeText: "实时数据",
-        changeType: "success"
-      },
-      {
-        value: toNumber(kksData.total),
-        label: "设备编码",
-        changeText: "实时数据",
-        changeType: "success"
-      }
-    ];
+    stats.value = buildStatsCards(statsData);
 
     activities.value = buildRecentActivities(
       docData.records,
@@ -173,20 +239,6 @@ async function loadDashboardData(showSuccessMessage = false) {
 function refreshDashboard() {
   loadDashboardData(true);
 }
-
-function go3D() {
-  router.push("/visualization/3d-viewer");
-}
-
-function goSearch() {
-  router.push("/search-nav/search");
-}
-
-function newProject() {
-  message("新建项目功能开发中", { type: "info" });
-}
-
-const uploadDialogVisible = ref(false);
 
 function openUploadDialog() {
   uploadDialogVisible.value = true;
@@ -336,14 +388,15 @@ onMounted(() => {
         </div>
       </template>
       <el-space wrap>
-        <el-button type="primary" @click="openUploadDialog">上传文档</el-button>
-        <el-button @click="newProject">新建项目</el-button>
-        <el-button @click="go3D">三维浏览</el-button>
-        <el-button @click="goSearch">关联搜索</el-button>
+        <el-button
+          v-for="item in quickActions"
+          :key="item.key"
+          :type="item.type || 'default'"
+          @click="item.action"
+        >
+          {{ item.label }}
+        </el-button>
       </el-space>
-      <div class="text-sm text-[var(--el-text-color-secondary)] mt-3">
-        <span>提示：可通过侧边栏快速访问各功能模块。</span>
-      </div>
     </el-card>
 
     <UploadDialog

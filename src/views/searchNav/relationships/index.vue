@@ -2,8 +2,14 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
-import { getHandoverDocumentList } from "@/api/handoverDocuments";
+import { getHandoverKksList } from "@/api/handoverData";
+import {
+  downloadHandoverDocumentFile,
+  getHandoverDocumentDetail,
+  getHandoverDocumentList
+} from "@/api/handoverDocuments";
 import { getHandoverModelList } from "@/api/handoverModels";
+import FilePreview from "@/views/handover/documents/components/FilePreview.vue";
 import {
   batchDeleteRelationRecords,
   createRelationRecord,
@@ -11,7 +17,6 @@ import {
   deleteRelationRecordsBySource,
   deleteRelationRecordsByTarget,
   getRelationRecordDetail,
-  getKksOptions,
   getSystemNodeTree,
   listRelationRecordsBySource,
   listRelationRecordsBySourceAndType,
@@ -20,6 +25,11 @@ import {
   updateRelationRecord
 } from "@/api/searchNav";
 import { message } from "@/utils/message";
+import {
+  normalizeHandoverDocumentRecord,
+  triggerHandoverDocumentDownload,
+  unwrapHandoverDocumentFileResponse
+} from "@/utils/handoverDocument";
 
 defineOptions({
   name: "Relationships"
@@ -78,6 +88,14 @@ const pagination = reactive({
   size: 10
 });
 
+function readOptionList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.records)) return data.records;
+  if (Array.isArray(data?.options)) return data.options;
+  if (Array.isArray(data?.list)) return data.list;
+  return [];
+}
+
 function getKindOptions(kind) {
   if (kind === "node") return nodeOptions.value;
   if (kind === "kks") return kksOptions.value;
@@ -129,12 +147,12 @@ async function fetchNodeNameMap() {
 
 async function fetchKksNameMap() {
   try {
-    const response = await getKksOptions({
+    const response = await getHandoverKksList({
       page: 1,
-      size: 200
+      size: 1000
     });
     console.log("[search-nav/relationships] kks.options:", response);
-    const rows = Array.isArray(response?.data) ? response.data : [];
+    const rows = readOptionList(response?.data);
     kksNameMap.value = rows.reduce((acc, item) => {
       if (item?.id) {
         acc[item.id] = item.name || item.kks || item.id;
@@ -162,11 +180,7 @@ async function fetchDocumentNameMap() {
       size: 100
     });
     console.log("[search-nav/relationships] documents.list:", response);
-    const rows = Array.isArray(response?.data?.records)
-      ? response.data.records
-      : Array.isArray(response?.data)
-        ? response.data
-        : [];
+    const rows = readOptionList(response?.data);
     documentNameMap.value = rows.reduce((acc, item) => {
       if (item?.id) {
         acc[item.id] = item.name || item.id;
@@ -191,11 +205,7 @@ async function fetchModelNameMap() {
       size: 100
     });
     console.log("[search-nav/relationships] models.list:", response);
-    const rows = Array.isArray(response?.data?.records)
-      ? response.data.records
-      : Array.isArray(response?.data)
-        ? response.data
-        : [];
+    const rows = readOptionList(response?.data);
     modelNameMap.value = rows.reduce((acc, item) => {
       if (item?.id) {
         acc[item.id] = item.name || item.id;
@@ -318,6 +328,8 @@ const filteredRows = computed(() => {
 const detailOpen = ref(false);
 const detailRow = ref(null);
 const detailLoading = ref(false);
+const documentPreviewVisible = ref(false);
+const documentPreviewRow = ref(null);
 const editOpen = ref(false);
 const editMode = ref("create");
 const editForm = reactive({
@@ -365,6 +377,45 @@ async function openDetail(row) {
     detailRow.value = row;
   } finally {
     detailLoading.value = false;
+  }
+}
+
+async function openDocumentPreviewById(documentId) {
+  if (!documentId) return;
+  try {
+    const response = await getHandoverDocumentDetail(documentId);
+    const detail = normalizeHandoverDocumentRecord(response?.data || {});
+    if (!detail?.id) {
+      throw new Error("未获取到文档详情");
+    }
+    documentPreviewRow.value = detail;
+    documentPreviewVisible.value = true;
+  } catch (error) {
+    console.error(
+      "[search-nav/relationships] open document preview failed:",
+      error
+    );
+    message(error?.message || "打开文档失败", { type: "error" });
+  }
+}
+
+async function handlePreviewDownload(row) {
+  if (!row?.id) return;
+  try {
+    const blob = await unwrapHandoverDocumentFileResponse(
+      await downloadHandoverDocumentFile(row.id),
+      "下载文件失败"
+    );
+    if (!triggerHandoverDocumentDownload(blob, row.name || "document")) {
+      throw new Error("浏览器不支持当前下载方式");
+    }
+    message(`已开始下载：${row.name || row.id}`, { type: "success" });
+  } catch (error) {
+    console.error(
+      "[search-nav/relationships] download document failed:",
+      error
+    );
+    message(error?.message || "下载文件失败", { type: "error" });
   }
 }
 
@@ -892,7 +943,19 @@ onMounted(async () => {
         </div>
         <el-divider />
         <el-space wrap>
-          <el-button @click="jumpTo('docs')">查看文档</el-button>
+          <el-button
+            v-if="detailRow.targetKind === 'doc'"
+            @click="openDocumentPreviewById(detailRow.targetId)"
+          >
+            打开文档
+          </el-button>
+          <el-button
+            v-if="detailRow.targetKind === 'doc'"
+            @click="jumpTo('docs', { id: detailRow.targetId })"
+          >
+            进入文档管理
+          </el-button>
+          <el-button v-else @click="jumpTo('docs')">查看文档</el-button>
           <el-button @click="jumpTo('models')">查看模型</el-button>
           <el-button @click="jumpTo('viewer')">三维查看</el-button>
           <el-button type="primary" @click="smartJumpFromRelation(detailRow)"
@@ -968,5 +1031,11 @@ onMounted(async () => {
         </el-space>
       </template>
     </el-dialog>
+
+    <FilePreview
+      v-model:visible="documentPreviewVisible"
+      :row="documentPreviewRow"
+      @download="handlePreviewDownload"
+    />
   </div>
 </template>

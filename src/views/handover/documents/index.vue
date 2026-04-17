@@ -4,10 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
 import { useUserStoreHook } from "@/store/modules/user";
 import { useDdLinkageStoreHook } from "@/store/modules/ddLinkage";
-import {
-  getHandoverKksOptions,
-  getHandoverSystemNodeOptions
-} from "@/api/handoverDictionary";
+import { getHandoverSystemNodeOptions } from "@/api/handoverDictionary";
+import { getHandoverKksList } from "@/api/handoverData";
 import UploadDialog from "../components/UploadDialog.vue";
 import FilePreview from "./components/FilePreview.vue";
 import {
@@ -207,13 +205,24 @@ async function loadDictionaries() {
   try {
     const [nodeRes, kksRes] = await Promise.all([
       getHandoverSystemNodeOptions(),
-      getHandoverKksOptions()
+      getHandoverKksList({
+        page: 1,
+        size: 1000
+      })
     ]);
     const rawNodeOptions = readOptionList(nodeRes?.data);
     nodeTreeOptions.value = buildNodeTreeOptions(rawNodeOptions);
     nodeOptions.value = flattenNodeTreeOptions(nodeTreeOptions.value, []);
-    kksOptions.value = readOptionList(kksRes?.data)
-      .map(normalizeOption)
+    kksOptions.value = readRecords(kksRes?.data)
+      .map(item => {
+        const value = String(item?.kks || "").trim();
+        if (!value) return null;
+        const name = String(item?.name || "").trim();
+        return {
+          value,
+          label: name ? `${value} / ${name}` : value
+        };
+      })
       .filter(Boolean);
   } catch (error) {
     nodeOptions.value = [];

@@ -784,20 +784,21 @@ function createPointLabelSprite(text, status) {
 
 function createImageSprite(texture, options = {}) {
   if (!texture) return null;
-  const viewportScale =
-    options.sizeAttenuation === false ? getViewportAdaptiveScale() : 1;
+  const useSizeAttenuation = options.sizeAttenuation !== false;
+  const viewportScale = useSizeAttenuation ? 1 : getViewportAdaptiveScale();
+  const attenuationBoost = useSizeAttenuation ? 2.2 : 1;
   const material = new THREE.SpriteMaterial({
     map: texture,
     color: options.color || 0xffffff,
     transparent: true,
     alphaTest: 0.05,
     depthWrite: false,
-    sizeAttenuation: options.sizeAttenuation !== false
+    sizeAttenuation: useSizeAttenuation
   });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(
-    (options.scaleX || 0.5) * viewportScale,
-    (options.scaleY || 0.5) * viewportScale,
+    (options.scaleX || 0.5) * viewportScale * attenuationBoost,
+    (options.scaleY || 0.5) * viewportScale * attenuationBoost,
     options.scaleZ || 1
   );
   if (options.center) {

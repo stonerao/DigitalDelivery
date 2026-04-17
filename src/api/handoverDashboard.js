@@ -18,6 +18,10 @@ export const getHandoverKks = params => {
   return http.request("get", "/api/handover/kks/list", { params });
 };
 
+export const getDashboardStats = params => {
+  return http.request("get", "/api/handover/dashboard/stats", { params });
+};
+
 export const uploadHandoverDocuments = data => {
   return http.request("post", "/api/handover/documents/upload", data, {
     headers: {

@@ -79,6 +79,11 @@ import {
   upsertItem
 } from "./services/sceneAnchorService";
 import {
+  exportSceneAnchorExcel,
+  exportSceneAnchorJson,
+  importSceneAnchorFile
+} from "./services/sceneAnchorTransferService";
+import {
   buildCurrentSceneSchemePayload,
   formatSceneSchemeTime,
   resolveSceneSchemeUuids
@@ -1213,6 +1218,67 @@ function handleSavePublicStyle({ kind, style }) {
 
 function openSettingsDialog() {
   settingsDialogVisible.value = true;
+}
+
+function applyImportedSceneAnchors({ kind, items = [], mode = "append" }) {
+  if (kind === "camera") {
+    const next =
+      mode === "replace"
+        ? items
+        : items.reduce(
+            (list, item) => upsertItem(list, item),
+            [...cameraAnchors.value]
+          );
+    cameraAnchors.value = next;
+    projectStore.setCameraAnchors(next);
+  } else {
+    const next =
+      mode === "replace"
+        ? items
+        : items.reduce(
+            (list, item) => upsertItem(list, item),
+            [...anchors.value]
+          );
+    anchors.value = next;
+    projectStore.setAnchors(next);
+  }
+
+  persistSceneAnchorData();
+  syncSceneAnchors();
+}
+
+function handleExportSceneAnchorData({ kind, format }) {
+  const items = kind === "camera" ? cameraAnchors.value : anchors.value;
+  if (format === "excel") {
+    exportSceneAnchorExcel({ kind, items });
+  } else {
+    exportSceneAnchorJson({ kind, items });
+  }
+  message(
+    kind === "camera"
+      ? `已导出摄像头点位${format === "excel" ? " Excel" : " JSON"}`
+      : `已导出点位${format === "excel" ? " Excel" : " JSON"}`,
+    { type: "success" }
+  );
+}
+
+async function handleImportSceneAnchorData({ kind, format, mode, file }) {
+  try {
+    const items = await importSceneAnchorFile({ file, kind, format });
+    if (!items.length) {
+      message("导入失败：未解析到有效数据", { type: "warning" });
+      return;
+    }
+    applyImportedSceneAnchors({ kind, items, mode });
+    message(
+      kind === "camera"
+        ? `已导入 ${items.length} 条摄像头点位`
+        : `已导入 ${items.length} 条点位`,
+      { type: "success" }
+    );
+  } catch (error) {
+    message(error?.message || "导入失败，请检查文件格式", { type: "error" });
+  }
 }
 
 const selectedSceneDevice = computed(() => {
@@ -3938,13 +4004,16 @@ onBeforeUnmount(() => {
         <el-dialog
           v-model="settingsDialogVisible"
           title="设置"
-          width="720px"
+          width="880px"
+          class="dd-settings-dialog"
           destroy-on-close
         >
           <SceneStylePanel
             :anchor-style="getAnchorStyleDefault('anchor')"
             :camera-style="getAnchorStyleDefault('camera')"
             @save-style="handleSavePublicStyle"
+            @export-data="handleExportSceneAnchorData"
+            @import-data="handleImportSceneAnchorData"
           />
         </el-dialog>
 
@@ -4748,6 +4817,10 @@ onBeforeUnmount(() => {
 
 .dd-side-tabs :deep(.el-tab-pane) {
   height: 100%;
+}
+
+.dd-settings-dialog :deep(.el-dialog__body) {
+  padding: 16px 18px 18px;
 }
 
 .dd-quality-select {

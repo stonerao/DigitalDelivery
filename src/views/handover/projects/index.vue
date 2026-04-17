@@ -336,11 +336,6 @@ loadProjects();
           <el-descriptions-item label="更新人">
             {{ detailData.updatedBy || "-" }}
           </el-descriptions-item>
-          <el-descriptions-item label="项目信息" :span="2">
-            <pre class="dd-project-info-pre">{{
-              detailData.projectInfo || "-"
-            }}</pre>
-          </el-descriptions-item>
         </el-descriptions>
       </div>
     </el-dialog>
@@ -383,13 +378,3 @@ loadProjects();
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.dd-project-info-pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family:
-    Consolas, "SFMono-Regular", "Liberation Mono", Menlo, Courier, monospace;
-}
-</style>

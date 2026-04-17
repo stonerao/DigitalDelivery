@@ -17,6 +17,8 @@ import {
   updateHandoverProject
 } from "@/api/handoverProjects";
 import ViewerBottomToolbar from "./toolbars/ViewerBottomToolbar.vue";
+import StructurePanel from "./panels/StructurePanel.vue";
+import { buildTreeNodeIndex } from "./services/sceneTreeService";
 import { useViewerToolbarState } from "./services/useViewerToolbarState";
 
 defineOptions({
@@ -204,6 +206,10 @@ function parseProjectInfo(rawValue) {
   }
 }
 
+function normalizeActiveRightTab(value) {
+  return value === "navigation" || !value ? "structure" : value;
+}
+
 function buildProjectInfoPayload() {
   const objectBindings = sceneDevices.value
     .filter(item => item?.uuid)
@@ -355,7 +361,9 @@ async function loadProjectContext() {
       sceneSchemes.value = Array.isArray(payload.scene.schemes)
         ? payload.scene.schemes
         : [];
-      activeRightTab.value = payload.runtime?.activeSideTab || "navigation";
+      activeRightTab.value = normalizeActiveRightTab(
+        payload.runtime?.activeSideTab
+      );
       pointMarkersVisible.value =
         payload.runtime?.pointMarkersVisible !== false;
       displayMode.value = payload.runtime?.displayMode || "all";
@@ -500,13 +508,27 @@ const pointMarkersVisible = ref(true);
 const selectedSystemNodeId = ref("");
 const selectedQuickKks = ref("");
 const displayMode = ref("all");
-const activeRightTab = ref("navigation");
+const activeRightTab = ref("structure");
 const layerTreeRef = ref(null);
 const layerCheckedKeys = ref([]);
 const currentNavNodeKey = ref("");
 const schemeName = ref("");
 const sceneSchemes = ref([]);
 const measurementMode = ref("distance");
+const sceneTree = ref(null);
+const treeFilterText = ref("");
+const structureTreeRef = ref(null);
+const selectedTreeNode = ref(null);
+const treeDefaultExpandedKeys = ref([]);
+const treeNodeIndex = ref(new Map());
+const treeParentMap = ref(new Map());
+const treeExpandedKeys = ref(new Set());
+const meshOpacity = ref(0.2);
+const treeV2Props = {
+  value: "uuid",
+  label: "name",
+  children: "children"
+};
 
 const {
   toolOptions,
@@ -684,38 +706,6 @@ const displayModeText = computed(() => {
     tree: "分层树筛选"
   };
   return map[displayMode.value] || "全部构件";
-});
-
-const navigationTreeData = computed(() => {
-  return (ddStore.systemTree || []).map(region => {
-    const systemChildren = (region.children || []).map(system => {
-      const devices = getDevicesBySystem(system.id).map(device => ({
-        id: `nav-device:${device.uuid}`,
-        label: device.kks ? `${device.name}（${device.kks}）` : device.name,
-        kind: "device",
-        uuid: device.uuid,
-        nodeId: device.nodeId,
-        kks: device.kks,
-        raw: device
-      }));
-
-      return {
-        id: `nav-system:${system.id}`,
-        label: `${system.label}${devices.length ? `（${devices.length}）` : ""}`,
-        kind: "system",
-        nodeId: system.id,
-        children: devices
-      };
-    });
-
-    return {
-      id: `nav-region:${region.id}`,
-      label: region.label,
-      kind: "region",
-      nodeId: region.id,
-      children: systemChildren
-    };
-  });
 });
 
 const layerTreeData = computed(() => {
@@ -988,6 +978,19 @@ function refreshSceneDevices() {
   applyPersistedBindings();
 }
 
+function refreshSceneTree() {
+  const tree = viewerRef.value?.getSceneTree?.() || null;
+  sceneTree.value = tree;
+  const { nodeMap, parentMap } = buildTreeNodeIndex(tree);
+  treeNodeIndex.value = nodeMap;
+  treeParentMap.value = parentMap;
+  treeExpandedKeys.value = new Set();
+  treeDefaultExpandedKeys.value = tree?.uuid ? [tree.uuid] : [];
+  if (tree?.uuid) {
+    treeExpandedKeys.value.add(tree.uuid);
+  }
+}
+
 function syncNavigationSelections(item) {
   if (!item) return;
   selectedSystemNodeId.value = item.nodeId || "";
@@ -997,14 +1000,6 @@ function syncNavigationSelections(item) {
 function getDevicesBySystem(nodeId) {
   if (!nodeId) return [];
   return sceneDevices.value.filter(item => item.nodeId === nodeId);
-}
-
-function getDevicesByRegion(regionId) {
-  if (!regionId) return [];
-  const region = (ddStore.systemTree || []).find(item => item.id === regionId);
-  if (!region) return [];
-  const systemIds = new Set((region.children || []).map(item => item.id));
-  return sceneDevices.value.filter(item => systemIds.has(item.nodeId));
 }
 
 function getSceneDeviceUuids(item) {
@@ -1063,7 +1058,7 @@ function applySceneScheme(scheme) {
   const visibleKeys = resolveSceneSchemeUuids(scheme.visibleDeviceRefs || []);
   selectedSystemNodeId.value = scheme.selectedSystemNodeId || "";
   selectedQuickKks.value = scheme.selectedQuickKks || "";
-  activeRightTab.value = scheme.activeRightTab || "navigation";
+  activeRightTab.value = normalizeActiveRightTab(scheme.activeRightTab);
   pointMarkersVisible.value = scheme.pointMarkersVisible !== false;
 
   if (
@@ -1121,6 +1116,7 @@ function handleViewerLoaded() {
   nextTick(() => {
     viewerRef.value?.resetView?.();
   });
+  refreshSceneTree();
   refreshSceneDevices();
   syncRoamingState();
   syncMeasurementPoints();
@@ -1161,25 +1157,6 @@ function locateSystem(nodeId = selectedSystemNodeId.value, withMessage = true) {
   }
 }
 
-function locateRegion(regionId, withMessage = true) {
-  const devices = getDevicesByRegion(regionId);
-  if (!devices.length) {
-    message("当前区域暂无可定位构件", { type: "warning" });
-    return;
-  }
-  currentNavNodeKey.value = `nav-region:${regionId}`;
-  selectedSystemNodeId.value = devices[0].nodeId || "";
-  selectedQuickKks.value = devices[0].kks || "";
-  selectedDeviceUuid.value = devices[0].uuid;
-  viewerRef.value?.highlightByUUID?.(devices[0].uuid);
-  viewerRef.value?.focusByUUIDs?.(getSceneDevicesUuids(devices));
-  if (withMessage) {
-    message(`已定位到区域：${devices[0].systemName || "厂区分组"}`, {
-      type: "success"
-    });
-  }
-}
-
 function locateByKks(kks = selectedQuickKks.value) {
   if (!kks) {
     message("请先选择一个 KKS 设备", { type: "warning" });
@@ -1210,21 +1187,113 @@ function isolateDevice(item = selectedSceneDevice.value, withMessage = true) {
   }
 }
 
-function handleNavigationNodeClick(node) {
-  if (!node) return;
-  currentNavNodeKey.value = node.id;
+function structureFilterMethod(query, node) {
+  const keyword = String(query || "")
+    .trim()
+    .toLowerCase();
+  if (!keyword) return true;
+  return String(node?.name || "")
+    .trim()
+    .toLowerCase()
+    .includes(keyword);
+}
 
-  if (node.kind === "region") {
-    locateRegion(node.nodeId);
-    return;
+function handleTreeNodeExpand(data) {
+  if (data?.uuid) treeExpandedKeys.value.add(data.uuid);
+}
+
+function handleTreeNodeCollapse(data) {
+  if (data?.uuid) treeExpandedKeys.value.delete(data.uuid);
+}
+
+function expandTreeToUUID(uuid) {
+  const keys = new Set(treeExpandedKeys.value);
+  let current = uuid;
+  while (current) {
+    const parentUuid = treeParentMap.value.get(current);
+    if (parentUuid) keys.add(parentUuid);
+    current = parentUuid;
   }
-  if (node.kind === "system") {
-    locateSystem(node.nodeId);
-    return;
+  treeExpandedKeys.value = keys;
+  structureTreeRef.value?.setExpandedKeys?.([...keys]);
+}
+
+function scrollCurrentTreeNodeIntoView(uuid) {
+  structureTreeRef.value?.scrollTo?.(uuid);
+}
+
+async function selectTreeNodeByUUID(uuid, { openPanel = false } = {}) {
+  if (!uuid) return false;
+  if (openPanel) {
+    activeRightTab.value = "structure";
   }
-  if (node.kind === "device" && node.raw) {
-    locateDevice(node.raw);
+  if (!sceneTree.value) {
+    refreshSceneTree();
   }
+  selectedTreeNode.value = treeNodeIndex.value.get(uuid) || null;
+  await nextTick();
+  structureTreeRef.value?.setCurrentKey?.(uuid);
+  expandTreeToUUID(uuid);
+  await nextTick();
+  scrollCurrentTreeNodeIntoView(uuid);
+  return true;
+}
+
+function handleStructureNodeClick(node) {
+  selectedTreeNode.value = node || null;
+  if (!node?.uuid) return;
+  const target = sceneDevices.value.find(item => item.uuid === node.uuid) || {
+    uuid: node.uuid,
+    name: node.name || "未命名构件",
+    path: node.name || "",
+    type: node.type || "Mesh",
+    meshUuids: [node.uuid],
+    kks: "",
+    nodeId: ""
+  };
+  locateDevice(target, false);
+}
+
+function focusSelectedNode() {
+  if (!selectedTreeNode.value?.uuid) return;
+  viewerRef.value?.focusByUUID?.(selectedTreeNode.value.uuid);
+}
+
+function makeSelectedMeshTransparent() {
+  if (!selectedTreeNode.value?.isMesh) return;
+  viewerRef.value?.setMeshOpacityByUUID?.(
+    selectedTreeNode.value.uuid,
+    meshOpacity.value
+  );
+}
+
+function restoreSelectedMeshOpacity() {
+  if (!selectedTreeNode.value?.isMesh) return;
+  viewerRef.value?.setMeshOpacityByUUID?.(selectedTreeNode.value.uuid, 1);
+}
+
+function handleStructureFilterUpdate(value) {
+  treeFilterText.value = value || "";
+  structureTreeRef.value?.filter?.(treeFilterText.value);
+}
+
+function handleMeshOpacityUpdate(value) {
+  meshOpacity.value = Number(value) || 0.2;
+}
+
+async function isolateSelectedNode() {
+  if (!selectedTreeNode.value?.uuid) return;
+  viewerRef.value?.isolateByUUID?.(selectedTreeNode.value.uuid);
+  syncLayerTreeSelection([selectedTreeNode.value.uuid]);
+  await nextTick();
+  refreshSceneTree();
+}
+
+async function showAllObjects() {
+  viewerRef.value?.clearIsolation?.();
+  syncLayerTreeSelection();
+  await nextTick();
+  refreshSceneTree();
 }
 
 // ---- 导航树右键菜单 & 属性编辑 ----
@@ -1561,6 +1630,9 @@ function onObjectSelect(info) {
   const device = sceneDevices.value.find(item => item.uuid === info?.uuid);
   syncNavigationSelections(device);
   showObjectPanel.value = true;
+  if (info?.uuid) {
+    selectTreeNodeByUUID(info.uuid);
+  }
   syncMeasurementPoints();
 }
 
@@ -1619,9 +1691,16 @@ watch(
     selectedSystemNodeId.value = "";
     selectedQuickKks.value = "";
     displayMode.value = "all";
-    activeRightTab.value = "navigation";
+    activeRightTab.value = "structure";
     currentNavNodeKey.value = "";
     layerCheckedKeys.value = [];
+    sceneTree.value = null;
+    treeFilterText.value = "";
+    selectedTreeNode.value = null;
+    treeDefaultExpandedKeys.value = [];
+    treeNodeIndex.value = new Map();
+    treeParentMap.value = new Map();
+    treeExpandedKeys.value = new Set();
     selectedObjectInfo.value = null;
     showObjectPanel.value = false;
     viewerRef.value?.clearIsolation?.();
@@ -1822,7 +1901,7 @@ watch(
       <el-card shadow="never" class="min-h-[500px]">
         <template #header>
           <div class="flex items-center justify-between gap-2">
-            <div class="font-semibold">导航与构件</div>
+            <div class="font-semibold">模型结构与设备</div>
             <div class="text-xs text-[var(--el-text-color-secondary)]">
               共 {{ sceneDevices.length }} 个构件
             </div>
@@ -1830,207 +1909,29 @@ watch(
         </template>
 
         <el-tabs v-model="activeRightTab" class="viewer-side-tabs">
-          <el-tab-pane label="导航" name="navigation">
-            <el-scrollbar height="420px">
-              <div class="space-y-3 pr-1">
-                <div class="rounded border border-[var(--el-border-color)] p-3">
-                  <div class="mb-2 text-sm font-semibold">三级导航</div>
-                  <div
-                    class="mb-2 text-xs text-[var(--el-text-color-secondary)]"
-                  >
-                    按厂区分组、系统、设备逐级定位到模型对象。
-                  </div>
-                  <el-tree
-                    :data="navigationTreeData"
-                    node-key="id"
-                    highlight-current
-                    :current-node-key="currentNavNodeKey"
-                    default-expand-all
-                    :expand-on-click-node="false"
-                    @node-click="handleNavigationNodeClick"
-                    @node-contextmenu="handleNavTreeContextMenu"
-                  />
-                </div>
-
-                <div class="rounded border border-[var(--el-border-color)] p-3">
-                  <div class="mb-2 text-sm font-semibold">快速定位</div>
-                  <el-select
-                    v-model="selectedSystemNodeId"
-                    clearable
-                    filterable
-                    placeholder="按系统快速定位"
-                    class="w-full"
-                  >
-                    <el-option
-                      v-for="item in sceneDeviceSystemOptions"
-                      :key="item.value"
-                      :label="`${item.label}（${item.count}）`"
-                      :value="item.value"
-                    />
-                  </el-select>
-                  <div class="mt-2 flex items-center gap-2">
-                    <el-button size="small" @click="locateSystem()"
-                      >定位系统</el-button
-                    >
-                    <el-button
-                      size="small"
-                      link
-                      @click="applyDisplayMode('system')"
-                    >
-                      只看系统
-                    </el-button>
-                  </div>
-
-                  <el-select
-                    v-model="selectedQuickKks"
-                    clearable
-                    filterable
-                    placeholder="按 KKS 快速定位"
-                    class="mt-3 w-full"
-                  >
-                    <el-option
-                      v-for="item in sceneDeviceKksOptions"
-                      :key="item.value"
-                      :label="item.label"
-                      :value="item.value"
-                    />
-                  </el-select>
-                  <div class="mt-2 flex items-center gap-2">
-                    <el-button size="small" @click="locateByKks()"
-                      >定位设备</el-button
-                    >
-                    <el-button
-                      size="small"
-                      link
-                      @click="applyDisplayMode('selection')"
-                    >
-                      仅看当前设备
-                    </el-button>
-                  </div>
-                </div>
-
-                <div class="rounded border border-[var(--el-border-color)] p-3">
-                  <div class="mb-2 text-sm font-semibold">分层显示树</div>
-                  <div
-                    class="mb-2 text-xs text-[var(--el-text-color-secondary)]"
-                  >
-                    勾选需要显示的系统或设备，支持批量开关子层级。
-                  </div>
-                  <el-tree
-                    ref="layerTreeRef"
-                    :data="layerTreeData"
-                    node-key="id"
-                    show-checkbox
-                    default-expand-all
-                    :default-checked-keys="layerCheckedKeys"
-                    :expand-on-click-node="false"
-                    @check="handleLayerTreeCheck"
-                  />
-                </div>
-
-                <div class="rounded border border-[var(--el-border-color)] p-3">
-                  <div class="mb-2 text-sm font-semibold">显示控制</div>
-                  <div class="flex flex-wrap gap-2">
-                    <el-button
-                      size="small"
-                      :type="displayMode === 'all' ? 'primary' : 'default'"
-                      @click="applyDisplayMode('all')"
-                    >
-                      全部
-                    </el-button>
-                    <el-button
-                      size="small"
-                      :type="displayMode === 'business' ? 'primary' : 'default'"
-                      @click="applyDisplayMode('business')"
-                    >
-                      已绑定设备
-                    </el-button>
-                    <el-button
-                      size="small"
-                      :type="displayMode === 'system' ? 'primary' : 'default'"
-                      @click="applyDisplayMode('system')"
-                    >
-                      当前系统
-                    </el-button>
-                    <el-button
-                      size="small"
-                      :type="
-                        displayMode === 'selection' ? 'primary' : 'default'
-                      "
-                      @click="applyDisplayMode('selection')"
-                    >
-                      当前设备
-                    </el-button>
-                  </div>
-                  <div
-                    class="mt-2 text-xs text-[var(--el-text-color-secondary)]"
-                  >
-                    当前显示范围：{{ displayModeText }}
-                  </div>
-                </div>
-
-                <div class="rounded border border-[var(--el-border-color)] p-3">
-                  <div class="mb-2 text-sm font-semibold">场景方案</div>
-                  <div
-                    class="mb-2 text-xs text-[var(--el-text-color-secondary)]"
-                  >
-                    保存当前显隐树、定位方式和测点显示状态，便于后续一键恢复。
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <el-input
-                      v-model="schemeName"
-                      placeholder="输入方案名称，可留空自动命名"
-                    />
-                    <el-button type="primary" @click="saveSceneScheme">
-                      保存
-                    </el-button>
-                  </div>
-
-                  <div v-if="sceneSchemes.length > 0" class="mt-3 space-y-2">
-                    <div
-                      v-for="scheme in sceneSchemes"
-                      :key="scheme.id"
-                      class="rounded border border-[var(--el-border-color)] px-3 py-2"
-                    >
-                      <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0">
-                          <div class="truncate text-sm font-semibold">
-                            {{ scheme.name }}
-                          </div>
-                          <div
-                            class="mt-1 text-xs text-[var(--el-text-color-secondary)]"
-                          >
-                            {{ formatSchemeTime(scheme.savedAt) }} /
-                            {{ scheme.displayMode || "all" }}
-                          </div>
-                        </div>
-                        <div class="flex items-center gap-2">
-                          <el-button
-                            size="small"
-                            link
-                            @click="applySceneScheme(scheme)"
-                          >
-                            应用
-                          </el-button>
-                          <el-button
-                            size="small"
-                            link
-                            @click="removeSceneScheme(scheme.id)"
-                          >
-                            删除
-                          </el-button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <el-empty
-                    v-else
-                    description="当前模型还没有保存的场景方案"
-                    :image-size="68"
-                  />
-                </div>
-              </div>
-            </el-scrollbar>
+          <el-tab-pane label="当前模型结构" name="structure">
+            <StructurePanel
+              ref="structureTreeRef"
+              class="h-[420px]"
+              :scene-tree="sceneTree"
+              :tree-v2-props="treeV2Props"
+              :tree-default-expanded-keys="treeDefaultExpandedKeys"
+              :filter-method="structureFilterMethod"
+              :selected-tree-node="selectedTreeNode"
+              :mesh-opacity="meshOpacity"
+              :active="activeRightTab === 'structure'"
+              @refresh-tree="refreshSceneTree"
+              @update:tree-filter-text="handleStructureFilterUpdate"
+              @tree-node-click="handleStructureNodeClick"
+              @tree-node-expand="handleTreeNodeExpand"
+              @tree-node-collapse="handleTreeNodeCollapse"
+              @focus-selected-node="focusSelectedNode"
+              @make-selected-mesh-transparent="makeSelectedMeshTransparent"
+              @restore-selected-mesh-opacity="restoreSelectedMeshOpacity"
+              @isolate-selected-node="isolateSelectedNode"
+              @show-all-objects="showAllObjects"
+              @update:mesh-opacity="handleMeshOpacityUpdate"
+            />
           </el-tab-pane>
 
           <el-tab-pane label="设备" name="devices">

@@ -4,6 +4,13 @@ import { ThreeModelViewer } from "@/3d";
 import { useRoute, useRouter } from "vue-router";
 import { getHandoverKksList } from "@/api/handoverData";
 import PdfViewer from "@/views/handover/documents/components/PdfViewer.vue";
+import DocxViewer from "@/views/handover/documents/components/DocxViewer.vue";
+import ExcelViewer from "@/views/handover/documents/components/ExcelViewer.vue";
+import MarkdownViewer from "@/views/handover/documents/components/MarkdownViewer.vue";
+import OfficeViewer from "@/views/handover/documents/components/OfficeViewer.vue";
+import TextViewer from "@/views/handover/documents/components/TextViewer.vue";
+import ImageViewer from "@/views/handover/documents/components/ImageViewer.vue";
+import MediaViewer from "@/views/handover/documents/components/MediaViewer.vue";
 import {
   downloadHandoverDocumentFile,
   getHandoverDocumentDetail
@@ -13,6 +20,7 @@ import { searchNav } from "@/api/searchNav";
 import { message } from "@/utils/message";
 import {
   createHandoverDocumentObjectUrl,
+  getHandoverDocumentPreviewKind,
   normalizeHandoverDocumentRecord,
   triggerHandoverDocumentDownload,
   unwrapHandoverDocumentFileResponse
@@ -62,23 +70,8 @@ const selectedScopes = computed(() => {
 });
 
 const docPreviewKind = computed(() => {
-  const type = String(docDetail.value?.type || "").toUpperCase();
-  const mime = String(docDetail.value?.mime || "").toLowerCase();
-  const url = String(docDetail.value?.url || "").toLowerCase();
-
-  if (type === "PDF" || mime.includes("pdf") || url.endsWith(".pdf")) {
-    return "pdf";
-  }
-  if (
-    type === "IMAGE" ||
-    mime.startsWith("image/") ||
-    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].some(ext =>
-      url.endsWith(ext)
-    )
-  ) {
-    return "image";
-  }
-  return "unknown";
+  if (!docDetail.value) return "unknown";
+  return getHandoverDocumentPreviewKind(docDetail.value);
 });
 
 const docPreviewUrl = computed(() => {
@@ -467,13 +460,62 @@ watch(
 
           <div
             v-else-if="docPreviewKind === 'image' && docPreviewUrl"
-            class="rounded overflow-hidden border border-[var(--el-border-color)] bg-[var(--el-fill-color-lighter)] p-4 text-center"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
           >
-            <img
-              :src="docPreviewUrl"
-              :alt="docDetail.name || 'document'"
-              class="max-w-full max-h-[640px] inline-block"
+            <ImageViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'docx' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <DocxViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'excel' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <ExcelViewer :url="docPreviewUrl" :name="docDetail.name" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'markdown' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <MarkdownViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'text' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <TextViewer
+              :url="docPreviewUrl"
+              :mime="docDetail.mime"
+              :name="docDetail.name"
             />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'audio' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <MediaViewer :url="docPreviewUrl" kind="audio" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'video' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <MediaViewer :url="docPreviewUrl" kind="video" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'office' && docDetail"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <OfficeViewer :url="docPreviewUrl" :row="docDetail" />
           </div>
 
           <div

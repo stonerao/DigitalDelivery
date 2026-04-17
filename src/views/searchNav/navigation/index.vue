@@ -4,6 +4,13 @@ import { ThreeModelViewer } from "@/3d";
 import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import PdfViewer from "@/views/handover/documents/components/PdfViewer.vue";
+import DocxViewer from "@/views/handover/documents/components/DocxViewer.vue";
+import ExcelViewer from "@/views/handover/documents/components/ExcelViewer.vue";
+import MarkdownViewer from "@/views/handover/documents/components/MarkdownViewer.vue";
+import OfficeViewer from "@/views/handover/documents/components/OfficeViewer.vue";
+import TextViewer from "@/views/handover/documents/components/TextViewer.vue";
+import ImageViewer from "@/views/handover/documents/components/ImageViewer.vue";
+import MediaViewer from "@/views/handover/documents/components/MediaViewer.vue";
 import {
   downloadHandoverDocumentFile,
   getHandoverDocumentDetail
@@ -22,6 +29,7 @@ import {
 import { message } from "@/utils/message";
 import {
   createHandoverDocumentObjectUrl,
+  getHandoverDocumentPreviewKind,
   normalizeHandoverDocumentRecord,
   triggerHandoverDocumentDownload,
   unwrapHandoverDocumentFileResponse
@@ -224,12 +232,14 @@ async function restoreTreeUiState() {
   treeRef.value?.setCurrentKey?.(selectedId.value || null);
 }
 
-const flatTreeOptions = computed(() => {
-  return flattenTree(treeData.value, []).map(node => ({
-    value: node.id,
-    label: node.label
-  }));
-});
+function setTreeExpandedState(expandedKeySet) {
+  const nodesMap = treeRef.value?.store?.nodesMap;
+  if (!nodesMap) return;
+  Object.values(nodesMap).forEach(node => {
+    if (!node?.data?.id) return;
+    node.expanded = expandedKeySet.has(node.data.id);
+  });
+}
 
 const moveTargetOptions = computed(() => {
   const invalidIds = new Set([
@@ -237,7 +247,17 @@ const moveTargetOptions = computed(() => {
     ...collectDescendantKeys(moveTargetNode.value?.id)
   ]);
 
-  return flatTreeOptions.value.filter(option => !invalidIds.has(option.value));
+  function walk(nodes = []) {
+    return nodes
+      .filter(node => !invalidIds.has(node.id))
+      .map(node => ({
+        value: node.id,
+        label: node.label,
+        children: walk(node.children || [])
+      }));
+  }
+
+  return walk(treeData.value);
 });
 
 const selectedNode = computed(() => {
@@ -278,24 +298,8 @@ function normalizeRelationEntityRows(relations = [], kind) {
 }
 
 const docPreviewKind = computed(() => {
-  const type = String(docDetail.value?.type || "").toUpperCase();
-  const mime = String(docDetail.value?.mime || "").toLowerCase();
-  const url = String(docDetail.value?.url || "").toLowerCase();
-
-  if (type === "PDF" || mime.includes("pdf") || url.endsWith(".pdf")) {
-    return "pdf";
-  }
-  if (
-    type === "IMAGE" ||
-    mime.startsWith("image/") ||
-    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].some(ext =>
-      url.endsWith(ext)
-    )
-  ) {
-    return "image";
-  }
-
-  return "unknown";
+  if (!docDetail.value) return "unknown";
+  return getHandoverDocumentPreviewKind(docDetail.value);
 });
 
 const docPreviewUrl = computed(() => {
@@ -445,6 +449,17 @@ function handleNodeExpand(data) {
 
 function handleNodeCollapse(data) {
   expandedKeys.value = expandedKeys.value.filter(key => key !== data.id);
+}
+
+function expandAllNodes() {
+  const keys = collectExpandableKeys(treeData.value, []);
+  expandedKeys.value = keys;
+  setTreeExpandedState(new Set(keys));
+}
+
+function collapseAllNodes() {
+  expandedKeys.value = [];
+  setTreeExpandedState(new Set());
 }
 
 function openCreateRoot() {
@@ -867,6 +882,12 @@ watch(
                 <el-button size="small" type="primary" @click="openCreateRoot">
                   新增根节点
                 </el-button>
+                <el-button size="small" @click="expandAllNodes">
+                  全部展开
+                </el-button>
+                <el-button size="small" @click="collapseAllNodes">
+                  全部收起
+                </el-button>
                 <el-button size="small" @click="importVisible = true">
                   导入
                 </el-button>
@@ -1152,13 +1173,62 @@ watch(
 
           <div
             v-else-if="docPreviewKind === 'image' && docPreviewUrl"
-            class="rounded overflow-hidden border border-[var(--el-border-color)] bg-[var(--el-fill-color-lighter)] p-4 text-center"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
           >
-            <img
-              :src="docPreviewUrl"
-              :alt="docDetail.name || 'document'"
-              class="max-w-full max-h-[640px] inline-block"
+            <ImageViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'docx' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <DocxViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'excel' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <ExcelViewer :url="docPreviewUrl" :name="docDetail.name" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'markdown' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <MarkdownViewer :url="docPreviewUrl" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'text' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <TextViewer
+              :url="docPreviewUrl"
+              :mime="docDetail.mime"
+              :name="docDetail.name"
             />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'audio' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <MediaViewer :url="docPreviewUrl" kind="audio" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'video' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <MediaViewer :url="docPreviewUrl" kind="video" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'office' && docDetail"
+            class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
+          >
+            <OfficeViewer :url="docPreviewUrl" :row="docDetail" />
           </div>
 
           <div
@@ -1282,19 +1352,16 @@ watch(
       <div class="mb-3 text-sm">
         当前节点：{{ moveTargetNode?.label || "-" }}
       </div>
-      <el-select
+      <el-tree-select
         v-model="moveTargetParentId"
         class="w-full"
+        :data="moveTargetOptions"
+        check-strictly
         filterable
+        clearable
+        node-key="value"
         placeholder="请选择目标父节点"
-      >
-        <el-option
-          v-for="item in moveTargetOptions"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        />
-      </el-select>
+      />
       <template #footer>
         <el-space>
           <el-button @click="moveVisible = false">取消</el-button>
