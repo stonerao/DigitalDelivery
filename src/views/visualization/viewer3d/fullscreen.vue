@@ -70,6 +70,7 @@ import {
   buildRenderableAnchors,
   createEmptyAnchorForm,
   createEmptyCameraForm,
+  normalizeAnchorStyle,
   normalizeAnchorForm,
   normalizeCameraForm,
   removeItem,
@@ -1035,6 +1036,10 @@ const clippingPresetOptions = CLIPPING_PRESET_OPTIONS;
 const clippingSummaryText = computed(() =>
   getActiveClippingSummary(runtimeClippingState.value)
 );
+const anchorStyleDefaults = ref({
+  anchor: {},
+  camera: {}
+});
 
 function stopClippingAnimation({ persist = true } = {}) {
   const wasPlaying = clippingAnimationPlaying.value;
@@ -1149,6 +1154,119 @@ const anchorBindingTypeOptions = ANCHOR_BINDING_TYPE_OPTIONS;
 const cameraTypeOptions = CAMERA_TYPE_OPTIONS;
 const cameraStreamTypeOptions = CAMERA_STREAM_TYPE_OPTIONS;
 const cameraWindowModeOptions = CAMERA_WINDOW_MODE_OPTIONS;
+
+function getAnchorStyleDefault(kind = "anchor") {
+  return anchorStyleDefaults.value?.[kind] || {};
+}
+
+function buildStyledAnchorForm(
+  kind = "anchor",
+  payload = {},
+  selectedObject = null
+) {
+  const defaultStyle = getAnchorStyleDefault(kind);
+  const form =
+    kind === "camera"
+      ? payload && Object.keys(payload).length
+        ? normalizeCameraForm({
+            ...payload,
+            style: {
+              ...defaultStyle,
+              ...(payload.style || {})
+            }
+          })
+        : createEmptyCameraForm(selectedObject)
+      : payload && Object.keys(payload).length
+        ? normalizeAnchorForm({
+            ...payload,
+            style: {
+              ...defaultStyle,
+              ...(payload.style || {})
+            }
+          })
+        : createEmptyAnchorForm(selectedObject);
+
+  form.style = normalizeAnchorStyle(
+    {
+      ...defaultStyle,
+      ...(form.style || {})
+    },
+    kind === "camera" ? "camera-point" : form.type || "measurement-point"
+  );
+  return form;
+}
+
+function persistAnchorStyleDefaults() {
+  const nextPackage = patchProjectPackage(
+    currentSceneSchemeScope.value,
+    {
+      metadata: getProjectMetadata(),
+      scene: {
+        anchorStyleDefaults: anchorStyleDefaults.value
+      }
+    },
+    getProjectMetadata()
+  );
+  projectStore.setProjectPackage(nextPackage);
+}
+
+function saveCurrentStyleAsDefault() {
+  const kind = anchorDialogKind.value;
+  const type = kind === "camera" ? "camera-point" : anchorForm.value.type;
+  anchorStyleDefaults.value = {
+    ...anchorStyleDefaults.value,
+    [kind]: normalizeAnchorStyle(anchorForm.value.style, type)
+  };
+  persistAnchorStyleDefaults();
+  message(
+    kind === "camera" ? "已保存为摄像头默认样式" : "已保存为点位默认样式",
+    {
+      type: "success"
+    }
+  );
+}
+
+function applyDefaultStyleToForm() {
+  const kind = anchorDialogKind.value;
+  const type = kind === "camera" ? "camera-point" : anchorForm.value.type;
+  anchorForm.value.style = normalizeAnchorStyle(
+    getAnchorStyleDefault(kind),
+    type
+  );
+}
+
+function applyStyleToSameKind() {
+  const kind = anchorDialogKind.value;
+  const style = normalizeAnchorStyle(
+    anchorForm.value.style,
+    kind === "camera" ? "camera-point" : anchorForm.value.type
+  );
+
+  if (kind === "camera") {
+    const next = cameraAnchors.value.map(item => ({
+      ...item,
+      style
+    }));
+    cameraAnchors.value = next;
+    projectStore.setCameraAnchors(next);
+  } else {
+    const next = anchors.value.map(item => ({
+      ...item,
+      style
+    }));
+    anchors.value = next;
+    projectStore.setAnchors(next);
+  }
+
+  persistSceneAnchorData();
+  syncSceneAnchors();
+  message(
+    kind === "camera" ? "已应用到全部摄像头点位" : "已应用到全部普通点位",
+    {
+      type: "success"
+    }
+  );
+}
 
 const selectedSceneDevice = computed(() => {
   return (
@@ -1270,9 +1388,9 @@ const renderableCameraAnchors = computed(() => {
     Array.isArray(positionPickingState.value.pickedPosition)
   ) {
     source.push({
-      ...normalizeAnchorForm(anchorForm.value),
+      ...normalizeCameraForm(anchorForm.value),
       id: "__picking-camera-preview__",
-      type: "custom-point",
+      type: "camera-point",
       anchorMode: "world",
       worldPosition: [...positionPickingState.value.pickedPosition],
       offset: [0, 0, 0],
@@ -1500,14 +1618,20 @@ function formatSchemeTime(value) {
 }
 
 function persistSceneAnchorData() {
-  patchProjectPackage(currentSceneSchemeScope.value, {
-    metadata: getProjectMetadata(),
-    scene: {
-      anchors: anchors.value,
-      cameras: cameraAnchors.value,
-      clipping: projectClippingState.value
-    }
-  });
+  const nextPackage = patchProjectPackage(
+    currentSceneSchemeScope.value,
+    {
+      metadata: getProjectMetadata(),
+      scene: {
+        anchors: anchors.value,
+        cameras: cameraAnchors.value,
+        clipping: projectClippingState.value,
+        anchorStyleDefaults: anchorStyleDefaults.value
+      }
+    },
+    getProjectMetadata()
+  );
+  projectStore.setProjectPackage(nextPackage);
 }
 
 function persistClippingState() {
@@ -1607,6 +1731,7 @@ function buildProjectInfoPayload() {
       },
       anchors: anchors.value,
       cameras: cameraAnchors.value,
+      anchorStyleDefaults: anchorStyleDefaults.value,
       measurements: measurementRecords.value,
       schemes: sceneSchemes.value,
       bookmarks: bookmarks.value,
@@ -1904,13 +2029,27 @@ function loadPersistedProjectState(projectInfo = null) {
   updateSceneModelNodeLabels();
 
   projectStore.setProjectPackage(projectPackage);
+  anchorStyleDefaults.value = {
+    anchor:
+      savedScene.anchorStyleDefaults?.anchor ||
+      projectPackage.scene?.anchorStyleDefaults?.anchor ||
+      {},
+    camera:
+      savedScene.anchorStyleDefaults?.camera ||
+      projectPackage.scene?.anchorStyleDefaults?.camera ||
+      {}
+  };
 
-  anchors.value = Array.isArray(savedScene.anchors)
-    ? savedScene.anchors
-    : projectPackage.scene?.anchors || [];
-  cameraAnchors.value = Array.isArray(savedScene.cameras)
-    ? savedScene.cameras
-    : projectPackage.scene?.cameras || [];
+  anchors.value = (
+    Array.isArray(savedScene.anchors)
+      ? savedScene.anchors
+      : projectPackage.scene?.anchors || []
+  ).map(item => buildStyledAnchorForm("anchor", item));
+  cameraAnchors.value = (
+    Array.isArray(savedScene.cameras)
+      ? savedScene.cameras
+      : projectPackage.scene?.cameras || []
+  ).map(item => buildStyledAnchorForm("camera", item));
   measurementRecords.value = Array.isArray(savedScene.measurements)
     ? savedScene.measurements
     : projectPackage.scene?.measurements || [];
@@ -2076,10 +2215,7 @@ function openCreateAnchorDialog(kind = "anchor") {
   stopPositionPicking({ restoreTool: false });
   anchorDialogKind.value = kind;
   anchorDialogMode.value = "create";
-  anchorForm.value =
-    kind === "camera"
-      ? createEmptyCameraForm(selectedObjectInfo.value)
-      : createEmptyAnchorForm(selectedObjectInfo.value);
+  anchorForm.value = buildStyledAnchorForm(kind, {}, selectedObjectInfo.value);
   anchorDialogVisible.value = true;
 }
 
@@ -2087,8 +2223,7 @@ function openEditAnchorDialog(item, kind = "anchor") {
   stopPositionPicking({ restoreTool: false });
   anchorDialogKind.value = kind;
   anchorDialogMode.value = "edit";
-  anchorForm.value =
-    kind === "camera" ? normalizeCameraForm(item) : normalizeAnchorForm(item);
+  anchorForm.value = buildStyledAnchorForm(kind, item);
   anchorDialogVisible.value = true;
 }
 
@@ -4332,6 +4467,116 @@ onBeforeUnmount(() => {
                 />
               </div>
             </el-form-item>
+
+            <el-divider content-position="left">样式设置</el-divider>
+            <el-form-item label="快捷操作">
+              <div class="flex w-full flex-wrap gap-2">
+                <el-button size="small" @click="applyDefaultStyleToForm">
+                  应用默认样式
+                </el-button>
+                <el-button size="small" @click="saveCurrentStyleAsDefault">
+                  设为默认样式
+                </el-button>
+                <el-button
+                  size="small"
+                  type="warning"
+                  @click="applyStyleToSameKind"
+                >
+                  应用到同类点位
+                </el-button>
+              </div>
+            </el-form-item>
+            <el-form-item
+              :label="anchorDialogKind === 'camera' ? '图标大小' : '点位大小'"
+            >
+              <el-input-number
+                v-model="anchorForm.style.markerSize"
+                :min="0.05"
+                :max="6"
+                :step="0.05"
+                controls-position="right"
+                class="w-full"
+              />
+            </el-form-item>
+            <el-form-item label="显示标签">
+              <el-switch v-model="anchorForm.style.showLabel" />
+            </el-form-item>
+            <template v-if="anchorForm.style.showLabel">
+              <el-form-item label="标签字号">
+                <el-input-number
+                  v-model="anchorForm.style.labelFontSize"
+                  :min="10"
+                  :max="72"
+                  :step="1"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </el-form-item>
+              <el-form-item label="标签宽度">
+                <el-input-number
+                  v-model="anchorForm.style.labelScaleX"
+                  :min="0.5"
+                  :max="8"
+                  :step="0.1"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </el-form-item>
+              <el-form-item label="标签高度">
+                <el-input-number
+                  v-model="anchorForm.style.labelScaleY"
+                  :min="0.2"
+                  :max="4"
+                  :step="0.05"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </el-form-item>
+              <el-form-item label="标签偏移">
+                <el-input-number
+                  v-model="anchorForm.style.labelOffsetY"
+                  :min="0.05"
+                  :max="6"
+                  :step="0.05"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </el-form-item>
+              <el-form-item label="标记颜色">
+                <el-input
+                  v-model="anchorForm.style.color"
+                  placeholder="#22c55e / rgb(...)"
+                />
+              </el-form-item>
+              <el-form-item label="边框颜色">
+                <el-input
+                  v-model="anchorForm.style.strokeColor"
+                  placeholder="#69b7ff / rgba(...)"
+                />
+              </el-form-item>
+              <el-form-item label="背景颜色">
+                <el-input
+                  v-model="anchorForm.style.backgroundColor"
+                  placeholder="rgba(15,23,42,0.82)"
+                />
+              </el-form-item>
+              <el-form-item label="文字颜色">
+                <el-input
+                  v-model="anchorForm.style.textColor"
+                  placeholder="#ffffff"
+                />
+              </el-form-item>
+              <el-form-item label="边框宽度">
+                <el-input-number
+                  v-model="anchorForm.style.borderWidth"
+                  :min="1"
+                  :max="12"
+                  :step="1"
+                  controls-position="right"
+                  class="w-full"
+                />
+              </el-form-item>
+            </template>
 
             <template v-if="anchorDialogKind === 'camera'">
               <el-form-item label="绑定设备">

@@ -774,6 +774,7 @@ function createImageSprite(texture, options = {}) {
   if (!texture) return null;
   const material = new THREE.SpriteMaterial({
     map: texture,
+    color: options.color || 0xffffff,
     transparent: true,
     alphaTest: 0.05,
     depthWrite: false
@@ -803,6 +804,15 @@ function getAnchorTypeColor(type) {
   return map[type] || 0x3b82f6;
 }
 
+function resolveAnchorColor(colorValue, fallback) {
+  if (!colorValue) return fallback;
+  try {
+    return new THREE.Color(colorValue);
+  } catch {
+    return fallback;
+  }
+}
+
 function getAnchorLabelText(anchor) {
   if (!anchor) return "点位";
   if (anchor.type === "camera-point") {
@@ -810,6 +820,57 @@ function getAnchorLabelText(anchor) {
   }
   if (anchor.runtimeState?.displayText) return anchor.runtimeState.displayText;
   return anchor.name || anchor.code || "点位";
+}
+
+function getAnchorRenderStyle(anchor, isCamera = false) {
+  const style = anchor?.style || {};
+  const fallbackColor = getAnchorTypeColor(anchor?.type);
+  return {
+    markerSize:
+      Number.isFinite(Number(style.markerSize)) && Number(style.markerSize) > 0
+        ? Number(style.markerSize)
+        : isCamera
+          ? 0.42
+          : 0.09,
+    labelScaleX:
+      Number.isFinite(Number(style.labelScaleX)) &&
+      Number(style.labelScaleX) > 0
+        ? Number(style.labelScaleX)
+        : isCamera
+          ? 2.4
+          : 2,
+    labelScaleY:
+      Number.isFinite(Number(style.labelScaleY)) &&
+      Number(style.labelScaleY) > 0
+        ? Number(style.labelScaleY)
+        : isCamera
+          ? 0.63
+          : 0.72,
+    labelFontSize:
+      Number.isFinite(Number(style.labelFontSize)) &&
+      Number(style.labelFontSize) > 0
+        ? Number(style.labelFontSize)
+        : 24,
+    labelOffsetY:
+      Number.isFinite(Number(style.labelOffsetY)) &&
+      Number(style.labelOffsetY) > 0
+        ? Number(style.labelOffsetY)
+        : isCamera
+          ? 0.52
+          : 0.42,
+    showLabel: style.showLabel !== false,
+    markerColor: resolveAnchorColor(style.color, fallbackColor),
+    strokeColor: style.strokeColor || "",
+    backgroundColor: style.backgroundColor || "",
+    textColor: style.textColor || "",
+    borderWidth:
+      Number.isFinite(Number(style.borderWidth)) &&
+      Number(style.borderWidth) > 0
+        ? Number(style.borderWidth)
+        : isCamera
+          ? 3
+          : 4
+  };
 }
 
 function getObjectWorldPositionByUUID(uuid) {
@@ -863,7 +924,7 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
   const position = resolveSceneAnchorPosition(anchor);
   if (!position) return null;
 
-  const color = getAnchorTypeColor(anchor.type);
+  const renderStyle = getAnchorRenderStyle(anchor, isCamera);
   const group = new THREE.Group();
   group.userData.isHelper = true;
   group.userData.isSceneAnchor = true;
@@ -873,8 +934,9 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
 
   if (isCamera) {
     const cameraSprite = createImageSprite(cameraMarkerTexture, {
-      scaleX: 0.42,
-      scaleY: 0.42,
+      scaleX: renderStyle.markerSize,
+      scaleY: renderStyle.markerSize,
+      color: renderStyle.markerColor,
       center: [0.5, 0.0]
     });
     if (cameraSprite) {
@@ -885,8 +947,8 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
     }
   } else {
     const body = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 20, 20),
-      new THREE.MeshBasicMaterial({ color })
+      new THREE.SphereGeometry(renderStyle.markerSize, 20, 20),
+      new THREE.MeshBasicMaterial({ color: renderStyle.markerColor })
     );
     body.userData.isHelper = true;
     body.userData.isSceneAnchor = true;
@@ -895,31 +957,44 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
     group.add(body);
   }
 
-  const sprite = createBadgeSprite(
-    getAnchorLabelText(anchor),
-    color,
-    isCamera
-      ? {
-          minWidth: 220,
-          maxWidth: 360,
-          minHeight: 55,
-          backgroundColor: "rgba(18, 38, 84, 0.82)",
-          strokeColor: "#69b7ff",
-          textColor: "#e6f4ff",
-          borderWidth: 3,
-          fontSize: 24,
-          center: [0.5, 0],
-          scaleX: 2.4,
-          scaleY: 0.63
-        }
-      : { width: 280, height: 96, scaleX: 2, scaleY: 0.72 }
-  );
-  if (sprite) {
-    sprite.position.set(0, isCamera ? 0.52 : 0.42, 0);
-    sprite.userData.isSceneAnchor = true;
-    sprite.userData.sceneAnchorId = anchor.id;
-    sprite.userData.sceneAnchorType = anchor.type;
-    group.add(sprite);
+  if (renderStyle.showLabel) {
+    const sprite = createBadgeSprite(
+      getAnchorLabelText(anchor),
+      renderStyle.markerColor,
+      isCamera
+        ? {
+            minWidth: 220,
+            maxWidth: 360,
+            minHeight: 55,
+            backgroundColor:
+              renderStyle.backgroundColor || "rgba(18, 38, 84, 0.82)",
+            strokeColor: renderStyle.strokeColor || "#69b7ff",
+            textColor: renderStyle.textColor || "#e6f4ff",
+            borderWidth: renderStyle.borderWidth,
+            fontSize: renderStyle.labelFontSize,
+            center: [0.5, 0],
+            scaleX: renderStyle.labelScaleX,
+            scaleY: renderStyle.labelScaleY
+          }
+        : {
+            width: 280,
+            height: 96,
+            backgroundColor: renderStyle.backgroundColor || undefined,
+            strokeColor: renderStyle.strokeColor || undefined,
+            textColor: renderStyle.textColor || undefined,
+            borderWidth: renderStyle.borderWidth,
+            fontSize: renderStyle.labelFontSize,
+            scaleX: renderStyle.labelScaleX,
+            scaleY: renderStyle.labelScaleY
+          }
+    );
+    if (sprite) {
+      sprite.position.set(0, renderStyle.labelOffsetY, 0);
+      sprite.userData.isSceneAnchor = true;
+      sprite.userData.sceneAnchorId = anchor.id;
+      sprite.userData.sceneAnchorType = anchor.type;
+      group.add(sprite);
+    }
   }
 
   return group;

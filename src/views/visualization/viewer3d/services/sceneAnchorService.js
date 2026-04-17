@@ -54,7 +54,44 @@ function normalizeVector3(value, fallback = [0, 0, 0]) {
   });
 }
 
-function buildBaseAnchor(partial = {}) {
+function normalizePositiveNumber(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
+  const isCamera = type === "camera-point";
+  return {
+    markerSize: normalizePositiveNumber(
+      style.markerSize,
+      isCamera ? 0.42 : 0.09
+    ),
+    labelScaleX: normalizePositiveNumber(style.labelScaleX, isCamera ? 2.4 : 2),
+    labelScaleY: normalizePositiveNumber(
+      style.labelScaleY,
+      isCamera ? 0.63 : 0.72
+    ),
+    labelFontSize: normalizePositiveNumber(style.labelFontSize, 24),
+    labelOffsetY: normalizePositiveNumber(
+      style.labelOffsetY,
+      isCamera ? 0.52 : 0.42
+    ),
+    showLabel: style.showLabel !== false,
+    color: asText(style.color || (isCamera ? "#0f766e" : "")),
+    strokeColor: asText(style.strokeColor || (isCamera ? "#69b7ff" : "")),
+    backgroundColor: asText(
+      style.backgroundColor || (isCamera ? "rgba(18, 38, 84, 0.82)" : "")
+    ),
+    textColor: asText(style.textColor || ""),
+    borderWidth: normalizePositiveNumber(style.borderWidth, isCamera ? 3 : 4)
+  };
+}
+
+function buildBaseAnchor(partial = {}, options = {}) {
+  const mergedStyle = {
+    ...(options.defaultStyle || {}),
+    ...(partial.style || {})
+  };
   return {
     id: partial.id || createId("anchor"),
     type: partial.type || "measurement-point",
@@ -78,16 +115,28 @@ function buildBaseAnchor(partial = {}) {
       value: asText(partial.payload?.value),
       unit: asText(partial.payload?.unit),
       displayText: asText(partial.payload?.displayText)
-    }
+    },
+    style: normalizeAnchorStyle(
+      mergedStyle,
+      partial.type || "measurement-point"
+    )
   };
 }
 
-function buildCameraAnchor(partial = {}) {
-  const base = buildBaseAnchor({
-    ...partial,
-    type: "camera-point",
-    offset: partial.offset || [0, 0.8, 0]
-  });
+function buildCameraAnchor(partial = {}, options = {}) {
+  const mergedStyle = {
+    ...(options.defaultStyle || {}),
+    ...(partial.style || {})
+  };
+  const base = buildBaseAnchor(
+    {
+      ...partial,
+      style: mergedStyle,
+      type: "camera-point",
+      offset: partial.offset || [0, 0.8, 0]
+    },
+    options
+  );
   return {
     ...base,
     cameraType: partial.cameraType || "fixed",
@@ -104,7 +153,8 @@ function buildCameraAnchor(partial = {}) {
     bindDeviceKks: asText(
       partial.bindDeviceKks || partial.businessBinding?.kks
     ),
-    bindObjectUuid: asText(partial.bindObjectUuid || partial.objectUuid)
+    bindObjectUuid: asText(partial.bindObjectUuid || partial.objectUuid),
+    style: normalizeAnchorStyle(partial.style, "camera-point")
   };
 }
 

@@ -23,6 +23,7 @@ function buildOfficeOnlineUrl(sourceUrl) {
 function isPublicUrl(url) {
   try {
     const parsed = new URL(url, window.location.origin);
+    if (!["http:", "https:"].includes(parsed.protocol)) return false;
     const host = parsed.hostname;
     return !["localhost", "127.0.0.1", "0.0.0.0"].includes(host);
   } catch {
@@ -51,6 +52,18 @@ async function tryBackendConversion(docId) {
   return "";
 }
 
+async function tryBackendSourceUrl(docId) {
+  try {
+    const res = await getHandoverDocumentPreviewUrl(docId);
+    const data = unwrapApiData(res, "");
+    const url = resolveHandoverDocumentUrl(String(data?.url || "").trim());
+    if (url) return url;
+  } catch {
+    // source preview url not available
+  }
+  return "";
+}
+
 async function loadOffice(row) {
   const docId = row?.id;
   if (!docId) {
@@ -69,8 +82,10 @@ async function loadOffice(row) {
       return;
     }
 
-    // 2. 兜底 Office Online，仅当传入的是可公网访问地址时才可用
-    const sourceUrl = String(props.url || "").trim();
+    // 2. 兜底 Office Online，优先使用后端返回的源文件地址
+    const sourceUrl = String(
+      (await tryBackendSourceUrl(docId)) || props.url || ""
+    ).trim();
     if (!sourceUrl) {
       throw new Error("当前未配置 Office 在线预览地址，请使用后端转换预览");
     }

@@ -8,6 +8,7 @@ import {
 import { downloadHandoverDocumentFile } from "@/api/handoverDocuments";
 import PdfViewer from "./PdfViewer.vue";
 import DocxViewer from "./DocxViewer.vue";
+import ExcelViewer from "./ExcelViewer.vue";
 import MarkdownViewer from "./MarkdownViewer.vue";
 import OfficeViewer from "./OfficeViewer.vue";
 import TextViewer from "./TextViewer.vue";
@@ -127,6 +128,12 @@ watch(
       <ImageViewer v-else-if="previewKind === 'image'" :url="previewUrl" />
 
       <DocxViewer v-else-if="previewKind === 'docx'" :url="previewUrl" />
+
+      <ExcelViewer
+        v-else-if="previewKind === 'excel'"
+        :url="previewUrl"
+        :name="props.row.name"
+      />
 
       <MarkdownViewer
         v-else-if="previewKind === 'markdown'"

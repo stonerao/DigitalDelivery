@@ -61,7 +61,8 @@ const TEXT_EXTENSIONS = new Set([
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "ogg", "mov", "m4v"]);
 const DOCX_EXTENSIONS = new Set(["docx"]);
-const OFFICE_EXTENSIONS = new Set(["doc", "xls", "xlsx", "ppt", "pptx"]);
+const EXCEL_EXTENSIONS = new Set(["xls", "xlsx"]);
+const OFFICE_EXTENSIONS = new Set(["doc", "ppt", "pptx"]);
 
 export function getLatestHandoverDocumentVersion(doc) {
   const versions = Array.isArray(doc?.versions) ? doc.versions : [];
@@ -241,15 +242,20 @@ export function getHandoverDocumentPreviewKind(doc) {
     return "docx";
   }
   if (
-    type === "DOC" ||
     type === "XLS" ||
     type === "XLSX" ||
+    mime.includes("spreadsheetml") ||
+    mime.includes("ms-excel") ||
+    EXCEL_EXTENSIONS.has(extension)
+  ) {
+    return "excel";
+  }
+  if (
+    type === "DOC" ||
     type === "PPT" ||
     type === "PPTX" ||
-    mime.includes("spreadsheetml") ||
     mime.includes("presentationml") ||
     mime.includes("msword") ||
-    mime.includes("ms-excel") ||
     mime.includes("ms-powerpoint") ||
     OFFICE_EXTENSIONS.has(extension)
   ) {

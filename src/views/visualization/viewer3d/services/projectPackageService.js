@@ -33,7 +33,11 @@ export function createEmptyProjectPackage(scope, metadata = {}) {
       measurements: [],
       schemes: [],
       clipping: createDefaultClippingState(),
-      clippingPresets: []
+      clippingPresets: [],
+      anchorStyleDefaults: {
+        anchor: {},
+        camera: {}
+      }
     },
     scripts: {
       animations: [],
@@ -86,6 +90,10 @@ function createBaseSections(projectPackage) {
     "scene/clipping.json":
       payload.scene?.clipping || createDefaultClippingState(),
     "scene/clipping-presets.json": payload.scene?.clippingPresets || [],
+    "scene/anchor-style-defaults.json": payload.scene?.anchorStyleDefaults || {
+      anchor: {},
+      camera: {}
+    },
     "scripts/animations.json": payload.scripts?.animations || [],
     "scripts/triggers.json": payload.scripts?.triggers || [],
     "assets/scene-manifest.json": payload.assets?.sceneManifest || {},
@@ -122,7 +130,11 @@ export function parseProjectPackageBundle(bundle, metadata = {}) {
       measurements: files["scene/measurements.json"] || [],
       schemes: files["scene/schemes.json"] || [],
       clipping: files["scene/clipping.json"] || createDefaultClippingState(),
-      clippingPresets: files["scene/clipping-presets.json"] || []
+      clippingPresets: files["scene/clipping-presets.json"] || [],
+      anchorStyleDefaults: files["scene/anchor-style-defaults.json"] || {
+        anchor: {},
+        camera: {}
+      }
     },
     scripts: {
       animations: files["scripts/animations.json"] || [],
@@ -171,6 +183,12 @@ export function hasProjectPackageContent(projectPackage) {
     hasNonEmptyArray(projectPackage.scene?.measurements) ||
     hasNonEmptyArray(projectPackage.scene?.schemes) ||
     hasNonEmptyArray(projectPackage.scene?.clippingPresets) ||
+    Boolean(
+      Object.keys(projectPackage.scene?.anchorStyleDefaults?.anchor || {})
+        .length ||
+      Object.keys(projectPackage.scene?.anchorStyleDefaults?.camera || {})
+        .length
+    ) ||
     hasClippingConfiguration(projectPackage.scene?.clipping) ||
     hasNonEmptyArray(projectPackage.assets?.sceneManifest?.groups) ||
     hasNonEmptyArray(projectPackage.assets?.sceneManifest?.lodLevels) ||
@@ -203,6 +221,10 @@ export function loadProjectPackage(scope, metadata = {}) {
       schemes: [],
       clipping: createDefaultClippingState(),
       clippingPresets: [],
+      anchorStyleDefaults: {
+        anchor: {},
+        camera: {}
+      },
       ...(payload.scene || {})
     },
     scripts: {
