@@ -1,0 +1,80 @@
+/* 全局滚动条样式（overlay 视觉 + 亮/暗色主题适配）
+
+  说明：
+  - Webkit(Chrome/Edge/Safari)：使用 ::-webkit-scrollbar 系列伪元素
+  - Firefox：使用 scrollbar-width / scrollbar-color
+  - overlay 模式在不同 OS/浏览器实现不同；这里在支持 overflow: overlay 的环境下优先启用
+*/
+
+:root {
+  /* 滑块透明度要求 */
+  --dd-scrollbar-thumb-opacity: 0.2;
+  --dd-scrollbar-thumb-opacity-hover: 1;
+
+  /* 尺寸与圆角 */
+  --dd-scrollbar-size: 10px;
+  --dd-scrollbar-radius: 999px;
+
+  /* 颜色（使用 rgb 变量便于控制透明度） */
+  --dd-scrollbar-thumb-rgb: 0 0 0;
+  --dd-scrollbar-track: transparent;
+}
+
+/* 暗色主题适配（项目使用 html.dark） */
+html.dark {
+  --dd-scrollbar-thumb-rgb: 255 255 255;
+}
+
+/* overlay 优先（仅在浏览器支持时启用） */
+@supports (overflow: overlay) {
+  html,
+  body,
+  .el-scrollbar__wrap {
+    overflow: overlay;
+  }
+}
+
+/* Firefox 全局滚动条 */
+* {
+  scrollbar-color: rgb(
+      var(--dd-scrollbar-thumb-rgb) / var(--dd-scrollbar-thumb-opacity)
+    )
+    var(--dd-scrollbar-track);
+  scrollbar-width: thin;
+}
+
+*:hover {
+  scrollbar-color: rgb(
+      var(--dd-scrollbar-thumb-rgb) / var(--dd-scrollbar-thumb-opacity-hover)
+    )
+    var(--dd-scrollbar-track);
+}
+
+/* Webkit 全局滚动条 */
+*::-webkit-scrollbar {
+  width: var(--dd-scrollbar-size);
+  height: var(--dd-scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--dd-scrollbar-track);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--dd-scrollbar-thumb-rgb));
+  background-clip: content-box;
+
+  /* 通过透明边框 + clip，形成“贴在内容上”的视觉（接近 overlay） */
+  border: 3px solid transparent;
+  border-radius: var(--dd-scrollbar-radius);
+  opacity: var(--dd-scrollbar-thumb-opacity);
+  transition: opacity 0.25s ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  opacity: var(--dd-scrollbar-thumb-opacity-hover);
+}

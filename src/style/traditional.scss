@@ -1,0 +1,52 @@
+/* 传统中文风格：简洁、稳重；仅在 .dd-page 范围生效，避免影响全局主题系统 */
+
+.dd-page {
+  padding: 16px;
+  color: var(--el-text-color-primary);
+}
+
+/* 路由容器页：仅承载 router-view，不施加页面内边距 */
+.dd-route-container {
+  padding: 0;
+}
+
+.dd-page__header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.dd-page__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+}
+
+.dd-page__subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.dd-page .el-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.dd-page .el-card__header {
+  font-weight: 600;
+}
+
+.dd-page .el-button {
+  border-radius: 4px;
+}
+
+.dd-page .el-input__wrapper,
+.dd-page .el-textarea__inner {
+  border-radius: 4px;
+}

@@ -1,0 +1,722 @@
+[
+  {
+    "title": "截图",
+    "icon": "icon-jietu"
+  },
+  {
+    "title": "投影",
+    "icon": "icon-touyingyi_o"
+  },
+  {
+    "title": "剖切",
+    "icon": "icon-pouqie"
+  },
+  {
+    "title": "重置",
+    "icon": "icon-zhongzhi"
+  },
+  {
+    "title": "顶视图",
+    "icon": "icon-dingshitu-01"
+  },
+  {
+    "title": "左视图",
+    "icon": "icon-zuoshitu"
+  },
+  {
+    "title": "拾取点",
+    "icon": "icon-shiqudian"
+  },
+  {
+    "title": "等轴测",
+    "icon": "icon-icon_dengzhou"
+  },
+  {
+    "title": "前视图",
+    "icon": "icon-qianshitu"
+  },
+  {
+    "title": "缩放",
+    "icon": "icon-iconset0442"
+  },
+  {
+    "title": "旋转",
+    "icon": "icon-yulanxuanzhuan"
+  },
+  {
+    "title": "移动",
+    "icon": "icon-move"
+  },
+  {
+    "title": "坐标轴",
+    "icon": "icon-zuobiaozhou1"
+  },
+  {
+    "title": "吸附",
+    "icon": "icon-xifu"
+  },
+  {
+    "title": "网格",
+    "icon": "icon-wanggeshezhi"
+  },
+  {
+    "title": "新建",
+    "icon": "icon-xinjian"
+  },
+  {
+    "title": "导入",
+    "icon": "icon-daoru_o"
+  },
+  {
+    "title": "导出",
+    "icon": "icon-daochu_o"
+  },
+  {
+    "title": "保存",
+    "icon": "icon-baocun"
+  },
+  {
+    "title": "上一步",
+    "icon": "icon-fanhuishangyibu-"
+  },
+  {
+    "title": "下一步",
+    "icon": "icon-fanhuixiayibu-"
+  },
+  {
+    "title": "清除",
+    "icon": "icon-qingchu"
+  },
+  {
+    "title": "工作台默认图标",
+    "icon": "icon-gongzuotaimorentubiao"
+  },
+  {
+    "title": "流程审批",
+    "icon": "icon-a-lujing1360"
+  },
+  {
+    "title": "拆分列",
+    "icon": "icon-chaifenlie"
+  },
+  {
+    "title": "join",
+    "icon": "icon-join"
+  },
+  {
+    "title": "空值处理",
+    "icon": "icon-kongzhichuli"
+  },
+  {
+    "title": "列转行",
+    "icon": "icon-liezhuanhang"
+  },
+  {
+    "title": "过滤",
+    "icon": "icon-guolv"
+  },
+  {
+    "title": "拆分",
+    "icon": "icon-chaifen"
+  },
+  {
+    "title": "合并列",
+    "icon": "icon-hebinglie"
+  },
+  {
+    "title": "派生列",
+    "icon": "icon-paishenglie"
+  },
+  {
+    "title": "排序",
+    "icon": "icon-paixu"
+  },
+  {
+    "title": "聚合",
+    "icon": "icon-juhe"
+  },
+  {
+    "title": "列选择",
+    "icon": "icon-liexuanze"
+  },
+  {
+    "title": "合并行",
+    "icon": "icon-hebinghang"
+  },
+  {
+    "title": "元数据编辑",
+    "icon": "icon-yuanshujubianji"
+  },
+  {
+    "title": "行转列",
+    "icon": "icon-hangzhuanlie"
+  },
+  {
+    "title": "去除重复值",
+    "icon": "icon-quchuzhongfuzhi"
+  },
+  {
+    "title": "行选择",
+    "icon": "icon-hangxuanze"
+  },
+  {
+    "title": "数据清洗",
+    "icon": "icon-shujuqingxi"
+  },
+  {
+    "title": "值替换",
+    "icon": "icon-zhitihuan"
+  },
+  {
+    "title": "增加序列号",
+    "icon": "icon-zengjiaxuliehao"
+  },
+  {
+    "title": "分层采样",
+    "icon": "icon-fencengcaiyang"
+  },
+  {
+    "title": "随机采样",
+    "icon": "icon-suijicaiyang"
+  },
+  {
+    "title": "加权采样",
+    "icon": "icon-jiaquancaiyang"
+  },
+  {
+    "title": "另存为CSV",
+    "icon": "icon-lingcunweiCSV"
+  },
+  {
+    "title": "另存为JSON",
+    "icon": "icon-lingcunweiJSON"
+  },
+  {
+    "title": "excel输出",
+    "icon": "icon-excelshuchu"
+  },
+  {
+    "title": "avro输出",
+    "icon": "icon-avroshuchu"
+  },
+  {
+    "title": "xml输出",
+    "icon": "icon-xmlshuchu"
+  },
+  {
+    "title": "avro输入",
+    "icon": "icon-avroshuru"
+  },
+  {
+    "title": "json输入",
+    "icon": "icon-jsonshuru"
+  },
+  {
+    "title": "json输出",
+    "icon": "icon-jsonshuchu"
+  },
+  {
+    "title": "xml输入",
+    "icon": "icon-xmlshuru"
+  },
+  {
+    "title": "excel输入",
+    "icon": "icon-excelshuru"
+  },
+  {
+    "title": "MR",
+    "icon": "icon-MR"
+  },
+  {
+    "title": "MDB",
+    "icon": "icon-MDB"
+  },
+  {
+    "title": "多路合并",
+    "icon": "icon-duoluhebing"
+  },
+  {
+    "title": "xml join",
+    "icon": "icon-xml"
+  },
+  {
+    "title": "http-get",
+    "icon": "icon-get"
+  },
+  {
+    "title": "运行ssh命令",
+    "icon": "icon-yunhangsshmingling"
+  },
+  {
+    "title": "json解析",
+    "icon": "icon-jsonjiexi"
+  },
+  {
+    "title": "勾",
+    "icon": "icon-gou"
+  },
+  {
+    "title": "扳手",
+    "icon": "icon-banshou"
+  },
+  {
+    "title": "禁用",
+    "icon": "icon-jinyong"
+  },
+  {
+    "title": "故障1",
+    "icon": "icon-guzhang1"
+  },
+  {
+    "title": "JMS输出",
+    "icon": "icon-JMSshuchu"
+  },
+  {
+    "title": "JMS输入",
+    "icon": "icon-JMSshuru"
+  },
+  {
+    "title": "MQTT输出",
+    "icon": "icon-MQTTshuchu"
+  },
+  {
+    "title": "MQTT输入",
+    "icon": "icon-MQTTshuru"
+  },
+  {
+    "title": "总结",
+    "icon": "icon-zongjie"
+  },
+  {
+    "title": "日志状态",
+    "icon": "icon-rizhizhuangtai"
+  },
+  {
+    "title": "名称节点存储",
+    "icon": "icon-mingchengjiediancunchu"
+  },
+  {
+    "title": "dfs存储类型",
+    "icon": "icon-dfscunchuleixing"
+  },
+  {
+    "title": "左右对比图",
+    "icon": "icon-zuoyouduibitu"
+  },
+  {
+    "title": "特殊表格",
+    "icon": "icon-teshubiaoge"
+  },
+  {
+    "title": "象形柱图",
+    "icon": "icon-xiangxingzhutu"
+  },
+  {
+    "title": "3d折线图",
+    "icon": "icon-a-3dzhexiantu"
+  },
+  {
+    "title": "全距图",
+    "icon": "icon-quanjutu"
+  },
+  {
+    "title": "3d饼图",
+    "icon": "icon-a-3dbingtu"
+  },
+  {
+    "title": "3d柱图",
+    "icon": "icon-a-3dzhutu"
+  },
+  {
+    "title": "力学气泡图",
+    "icon": "icon-lixueqipaotu"
+  },
+  {
+    "title": "gis地图",
+    "icon": "icon-gisditu"
+  },
+  {
+    "title": "3d散点图",
+    "icon": "icon-a-3dsandiantu"
+  },
+  {
+    "title": "进度条",
+    "icon": "icon-jindutiao"
+  },
+  {
+    "title": "水球图",
+    "icon": "icon-shuiqiutu"
+  },
+  {
+    "title": "时间",
+    "icon": "icon-shijian"
+  },
+  {
+    "title": "删除",
+    "icon": "icon-shanchu"
+  },
+  {
+    "title": "手机",
+    "icon": "icon-shouji"
+  },
+  {
+    "title": "礼物",
+    "icon": "icon-liwu"
+  },
+  {
+    "title": "文件包",
+    "icon": "icon-wenjianbao"
+  },
+  {
+    "title": "文件夹",
+    "icon": "icon-wenjianjia"
+  },
+  {
+    "title": "通知",
+    "icon": "icon-tongzhi"
+  },
+  {
+    "title": "文件",
+    "icon": "icon-wenjian"
+  },
+  {
+    "title": "向左",
+    "icon": "icon-xiangzuo"
+  },
+  {
+    "title": "直播",
+    "icon": "icon-zhibo"
+  },
+  {
+    "title": "收益",
+    "icon": "icon-shouyi"
+  },
+  {
+    "title": "画板备份 3",
+    "icon": "icon-a-huabanbeifen3"
+  },
+  {
+    "title": "向右",
+    "icon": "icon-xiangyou"
+  },
+  {
+    "title": "消息",
+    "icon": "icon-xiaoxi"
+  },
+  {
+    "title": "设置",
+    "icon": "icon-shezhi"
+  },
+  {
+    "title": "听",
+    "icon": "icon-ting"
+  },
+  {
+    "title": "反选",
+    "icon": "icon-fanxuan"
+  },
+  {
+    "title": "缩小",
+    "icon": "icon-suoxiao"
+  },
+  {
+    "title": "退出",
+    "icon": "icon-tuichu"
+  },
+  {
+    "title": "反馈",
+    "icon": "icon-fankui"
+  },
+  {
+    "title": "循环",
+    "icon": "icon-xunhuan"
+  },
+  {
+    "title": "内置灯效",
+    "icon": "icon-neizhidengxiao"
+  },
+  {
+    "title": "播放合辑",
+    "icon": "icon-bofangheji"
+  },
+  {
+    "title": "设置",
+    "icon": "icon-shezhi1"
+  },
+  {
+    "title": "全屏",
+    "icon": "icon-quanping"
+  },
+  {
+    "title": "皮u发",
+    "icon": "icon-piufa"
+  },
+  {
+    "title": "悬浮窗口",
+    "icon": "icon-xuanfuchuangkou"
+  },
+  {
+    "title": "屏幕同步",
+    "icon": "icon-pingmutongbu"
+  },
+  {
+    "title": "合集文件",
+    "icon": "icon-hejiwenjian"
+  },
+  {
+    "title": "自定义灯效",
+    "icon": "icon-zidingyidengxiao"
+  },
+  {
+    "title": "游戏交互",
+    "icon": "icon-youxijiaohu"
+  },
+  {
+    "title": "音乐律动",
+    "icon": "icon-yinlelvdong"
+  },
+  {
+    "title": "语言",
+    "icon": "icon-yuyan"
+  },
+  {
+    "title": "文件",
+    "icon": "icon-wenjian1"
+  },
+  {
+    "title": "删除",
+    "icon": "icon-shanchu1"
+  },
+  {
+    "title": "多设备",
+    "icon": "icon-duoshebei"
+  },
+  {
+    "title": "分享",
+    "icon": "icon-fenxiang"
+  },
+  {
+    "title": "去登录",
+    "icon": "icon-qudenglu"
+  },
+  {
+    "title": "人员管理",
+    "icon": "icon-renyuanguanli"
+  },
+  {
+    "title": "平台管理",
+    "icon": "icon-pingtaiguanli"
+  },
+  {
+    "title": "运营规则",
+    "icon": "icon-yunyingguize"
+  },
+  {
+    "title": "安全",
+    "icon": "icon-inquan"
+  },
+  {
+    "title": "版权",
+    "icon": "icon-banquan"
+  },
+  {
+    "title": "笔记本",
+    "icon": "icon-bijiben"
+  },
+  {
+    "title": "笔记本电脑",
+    "icon": "icon-bijibendiannao"
+  },
+  {
+    "title": "编辑",
+    "icon": "icon-bianji_1"
+  },
+  {
+    "title": "编辑_3",
+    "icon": "icon-bianji_3"
+  },
+  {
+    "title": "编辑_2",
+    "icon": "icon-bianji_2"
+  },
+  {
+    "title": "表格",
+    "icon": "icon-biaoge"
+  },
+  {
+    "title": "报表",
+    "icon": "icon-baobiao"
+  },
+  {
+    "title": "表情包",
+    "icon": "icon-biaoqingbao"
+  },
+  {
+    "title": "标签_1",
+    "icon": "icon-biaoqian_1"
+  },
+  {
+    "title": "菜单",
+    "icon": "icon-caidan"
+  },
+  {
+    "title": "办公",
+    "icon": "icon-bangong"
+  },
+  {
+    "title": "编辑",
+    "icon": "icon-bianji"
+  },
+  {
+    "title": "标签",
+    "icon": "icon-biaoqian"
+  },
+  {
+    "title": "踩",
+    "icon": "icon-cai"
+  },
+  {
+    "title": "查找用户",
+    "icon": "icon-chazhaoyonghu"
+  },
+  {
+    "title": "查看订单",
+    "icon": "icon-chakandingdan"
+  },
+  {
+    "title": "充值记录",
+    "icon": "icon-chongzhijilu"
+  },
+  {
+    "title": "财务中心",
+    "icon": "icon-caiwuzhongxin"
+  },
+  {
+    "title": "存储",
+    "icon": "icon-cunchu"
+  },
+  {
+    "title": "储存",
+    "icon": "icon-chucun"
+  },
+  {
+    "title": "处理器",
+    "icon": "icon-chuliqi"
+  },
+  {
+    "title": "出行",
+    "icon": "icon-chuhang"
+  },
+  {
+    "title": "查找",
+    "icon": "icon-chazhao"
+  },
+  {
+    "title": "库房管理",
+    "icon": "icon-kufangguanli"
+  },
+  {
+    "title": "盘点管理",
+    "icon": "icon-pandianguanli"
+  },
+  {
+    "title": "馆藏管理",
+    "icon": "icon-guancangguanli"
+  },
+  {
+    "title": "交接管理",
+    "icon": "icon-jiaojieguanli"
+  },
+  {
+    "title": "设置",
+    "icon": "icon-shezhi2"
+  },
+  {
+    "title": "首页",
+    "icon": "icon-shouye"
+  },
+  {
+    "title": "皮肤",
+    "icon": "icon-a-Group2"
+  },
+  {
+    "title": "板载",
+    "icon": "icon-banzai"
+  },
+  {
+    "title": "触发",
+    "icon": "icon-chufa"
+  },
+  {
+    "title": "放大",
+    "icon": "icon-fangda"
+  },
+  {
+    "title": "改键",
+    "icon": "icon-gaijian"
+  },
+  {
+    "title": "高级",
+    "icon": "icon-gaoji"
+  },
+  {
+    "title": "关闭",
+    "icon": "icon-guanbi"
+  },
+  {
+    "title": "宏",
+    "icon": "icon-hong"
+  },
+  {
+    "title": "键盘",
+    "icon": "icon-jianpan"
+  },
+  {
+    "title": "快捷设置",
+    "icon": "icon-kuaijieshezhi"
+  },
+  {
+    "title": "黑暗",
+    "icon": "icon-heian"
+  },
+  {
+    "title": "名称",
+    "icon": "icon-mingcheng"
+  },
+  {
+    "title": "设置",
+    "icon": "icon-shezhi3"
+  },
+  {
+    "title": "鼠标",
+    "icon": "icon-shubiao"
+  },
+  {
+    "title": "说明书",
+    "icon": "icon-shuomingshu"
+  },
+  {
+    "title": "系统",
+    "icon": "icon-xitong"
+  },
+  {
+    "title": "性能",
+    "icon": "icon-xingneng"
+  },
+  {
+    "title": "语言",
+    "icon": "icon-yuyan1"
+  },
+  {
+    "title": "商城",
+    "icon": "icon-a-Group1"
+  },
+  {
+    "title": "明亮",
+    "icon": "icon-a-Group21"
+  },
+  {
+    "title": "灯光",
+    "icon": "icon-dengguang"
+  }
+]

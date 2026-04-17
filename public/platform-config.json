@@ -1,0 +1,45 @@
+{
+  "Version": "6.3.0",
+  "Title": "数字化移交平台",
+  "FixedHeader": true,
+  "HiddenSideBar": false,
+  "MultiTagsCache": false,
+  "KeepAlive": true,
+  "Layout": "vertical",
+  "Theme": "light",
+  "DarkMode": false,
+  "ThemeMode": "light",
+  "Grey": false,
+  "Weak": false,
+  "HideTabs": false,
+  "HideFooter": false,
+  "Stretch": false,
+  "SidebarStatus": true,
+  "EpThemeColor": "#409EFF",
+  "ShowLogo": true,
+  "ShowModel": "smart",
+  "Viewer3D": {
+    "ModelObjectBindings": [
+      {
+        "kks": "10LAC10AP001",
+        "nodeId": "sys-1-1",
+        "matchAny": ["10lac10ap001", "主给水泵a", "给水泵a", "feedpumpa"]
+      },
+      {
+        "kks": "10LAC10AP002",
+        "nodeId": "sys-1-1",
+        "matchAny": ["10lac10ap002", "主给水泵b", "给水泵b", "feedpumpb"]
+      },
+      {
+        "kks": "10HAA00DS001",
+        "nodeId": "sys-2-2",
+        "matchAny": ["10haa00ds001", "dcs机柜", "控制机柜", "dcs cabinet"]
+      }
+    ]
+  },
+  "MenuArrowIconNoTransition": false,
+  "CachingAsyncRoutes": false,
+  "TooltipEffect": "light",
+  "ResponsiveStorageNameSpace": "responsive-",
+  "MenuSearchHistory": 6
+}

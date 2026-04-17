@@ -1,0 +1,18 @@
+{
+  "description": "中国传统色彩（用于界面配色参考）",
+  "palette": [
+    { "name": "黛蓝", "hex": "#2B3A67" },
+    { "name": "绛红", "hex": "#8B1E3F" },
+    { "name": "竹青", "hex": "#1F6F5B" },
+    { "name": "月白", "hex": "#DCE7F2" },
+    { "name": "宣纸白", "hex": "#F7F2E9" },
+    { "name": "墨黑", "hex": "#1D1D1F" }
+  ],
+  "usage": {
+    "primary": "黛蓝",
+    "danger": "绛红",
+    "success": "竹青",
+    "backgroundLight": "宣纸白",
+    "backgroundMuted": "月白"
+  }
+}
