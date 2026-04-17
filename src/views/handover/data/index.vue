@@ -41,9 +41,9 @@ const pagination = ref({
 
 const statusOptions = [
   { label: "全部状态", value: "" },
-  { label: "已校验", value: "VALID" },
-  { label: "待校验", value: "PENDING" },
-  { label: "异常", value: "INVALID" }
+  { label: "已校验", value: "已校验" },
+  { label: "待校验", value: "待校验" },
+  { label: "异常", value: "异常" }
 ];
 const importModeOptions = [
   { label: "合并导入", value: "merge" },

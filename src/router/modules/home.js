@@ -119,6 +119,15 @@ export default [
           title: "项目管理",
           icon: "ep:folder"
         }
+      },
+      {
+        path: "/handover/dwg-preview-poc",
+        name: "HandoverDwgPreviewPoc",
+        component: () => import("@/views/handover/documents/dwgPreviewPoc.vue"),
+        meta: {
+          title: "DWG 预览 PoC",
+          showLink: false
+        }
       }
     ]
   },

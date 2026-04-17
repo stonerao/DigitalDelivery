@@ -368,7 +368,7 @@ watch(
           <el-checkbox v-model="scopes.documents">文档</el-checkbox>
           <el-checkbox v-model="scopes.models">三维模型</el-checkbox>
           <el-checkbox v-model="scopes.devices">设备数据</el-checkbox>
-          <el-checkbox v-model="scopes.pid">P&ID图纸</el-checkbox>
+          <!-- <el-checkbox v-model="scopes.pid">P&ID图纸</el-checkbox> -->
         </el-space>
       </div>
       <el-button

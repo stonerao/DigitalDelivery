@@ -47,6 +47,8 @@
     "url": "https://github.com/xiaoxian521"
   },
   "dependencies": {
+    "@cadview/core": "0.5.0",
+    "@cadview/dwg": "0.2.0",
     "@pureadmin/descriptions": "^1.2.1",
     "@pureadmin/table": "^3.3.0",
     "@pureadmin/utils": "^2.6.3",

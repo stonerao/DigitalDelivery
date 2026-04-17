@@ -1,4 +1,6 @@
 <script setup>
+import { Setting } from "@element-plus/icons-vue";
+
 defineOptions({
   name: "ViewerTopbar"
 });
@@ -32,6 +34,7 @@ defineProps({
 
 const emit = defineEmits([
   "back",
+  "open-settings",
   "save-project",
   "update:quality",
   "quality-change",
@@ -60,6 +63,8 @@ function onQualityChange(value) {
     >
       保存项目
     </el-button>
+
+    <el-button :icon="Setting" circle @click="emit('open-settings')" />
 
     <div class="flex items-center gap-2">
       <span class="text-xs text-[var(--el-text-color-secondary)]">画质</span>

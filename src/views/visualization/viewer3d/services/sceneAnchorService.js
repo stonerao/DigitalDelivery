@@ -66,24 +66,15 @@ export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
       style.markerSize,
       isCamera ? 0.42 : 0.09
     ),
-    labelScaleX: normalizePositiveNumber(style.labelScaleX, isCamera ? 2.4 : 2),
-    labelScaleY: normalizePositiveNumber(
-      style.labelScaleY,
-      isCamera ? 0.63 : 0.72
-    ),
     labelFontSize: normalizePositiveNumber(style.labelFontSize, 24),
     labelOffsetY: normalizePositiveNumber(
       style.labelOffsetY,
       isCamera ? 0.52 : 0.42
     ),
+    iconSizeAttenuation: Boolean(style.iconSizeAttenuation),
     showLabel: style.showLabel !== false,
     color: asText(style.color || (isCamera ? "#0f766e" : "")),
-    strokeColor: asText(style.strokeColor || (isCamera ? "#69b7ff" : "")),
-    backgroundColor: asText(
-      style.backgroundColor || (isCamera ? "rgba(18, 38, 84, 0.82)" : "")
-    ),
-    textColor: asText(style.textColor || ""),
-    borderWidth: normalizePositiveNumber(style.borderWidth, isCamera ? 3 : 4)
+    labelColor: asText(style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff"))
   };
 }
 

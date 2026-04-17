@@ -589,6 +589,7 @@ let anchorsVisible = true;
 let cameraAnchorsVisible = true;
 let sceneAnchors = [];
 let sceneCameraAnchors = [];
+let linkedPoints = [];
 const anchorObjectMap = new Map();
 const cameraAnchorObjectMap = new Map();
 const anchorRaycaster = new THREE.Raycaster();
@@ -620,6 +621,14 @@ let ambientLight;
 let rendererAntialias = true;
 
 const canRender = computed(() => Boolean(rootRef.value));
+
+function getViewportAdaptiveScale() {
+  const rect = rootRef.value?.getBoundingClientRect?.();
+  const width = Math.max(1, rect?.width || 1920);
+  const height = Math.max(1, rect?.height || 1080);
+  const shortEdge = Math.min(width, height);
+  return THREE.MathUtils.clamp(shortEdge / 1080, 0.72, 1.18);
+}
 
 function createScene() {
   scene = new THREE.Scene();
@@ -749,14 +758,17 @@ function createBadgeSprite(text, color, options = {}) {
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
+  const viewportScale =
+    options.sizeAttenuation === false ? getViewportAdaptiveScale() : 1;
   const material = new THREE.SpriteMaterial({
     map: texture,
-    transparent: true
+    transparent: true,
+    sizeAttenuation: options.sizeAttenuation !== false
   });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(
-    options.scaleX || canvas.width / 120,
-    options.scaleY || canvas.height / 120,
+    (options.scaleX || canvas.width / 120) * viewportScale,
+    (options.scaleY || canvas.height / 120) * viewportScale,
     options.scaleZ || 1
   );
   if (options.center) {
@@ -772,17 +784,20 @@ function createPointLabelSprite(text, status) {
 
 function createImageSprite(texture, options = {}) {
   if (!texture) return null;
+  const viewportScale =
+    options.sizeAttenuation === false ? getViewportAdaptiveScale() : 1;
   const material = new THREE.SpriteMaterial({
     map: texture,
     color: options.color || 0xffffff,
     transparent: true,
     alphaTest: 0.05,
-    depthWrite: false
+    depthWrite: false,
+    sizeAttenuation: options.sizeAttenuation !== false
   });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(
-    options.scaleX || 0.5,
-    options.scaleY || 0.5,
+    (options.scaleX || 0.5) * viewportScale,
+    (options.scaleY || 0.5) * viewportScale,
     options.scaleZ || 1
   );
   if (options.center) {
@@ -825,6 +840,12 @@ function getAnchorLabelText(anchor) {
 function getAnchorRenderStyle(anchor, isCamera = false) {
   const style = anchor?.style || {};
   const fallbackColor = getAnchorTypeColor(anchor?.type);
+  const labelFontSize =
+    Number.isFinite(Number(style.labelFontSize)) &&
+    Number(style.labelFontSize) > 0
+      ? Number(style.labelFontSize)
+      : 24;
+  const labelScaleBase = THREE.MathUtils.clamp(labelFontSize / 24, 0.75, 2.4);
   return {
     markerSize:
       Number.isFinite(Number(style.markerSize)) && Number(style.markerSize) > 0
@@ -832,25 +853,9 @@ function getAnchorRenderStyle(anchor, isCamera = false) {
         : isCamera
           ? 0.42
           : 0.09,
-    labelScaleX:
-      Number.isFinite(Number(style.labelScaleX)) &&
-      Number(style.labelScaleX) > 0
-        ? Number(style.labelScaleX)
-        : isCamera
-          ? 2.4
-          : 2,
-    labelScaleY:
-      Number.isFinite(Number(style.labelScaleY)) &&
-      Number(style.labelScaleY) > 0
-        ? Number(style.labelScaleY)
-        : isCamera
-          ? 0.63
-          : 0.72,
-    labelFontSize:
-      Number.isFinite(Number(style.labelFontSize)) &&
-      Number(style.labelFontSize) > 0
-        ? Number(style.labelFontSize)
-        : 24,
+    labelScaleX: (isCamera ? 2.4 : 2) * labelScaleBase,
+    labelScaleY: (isCamera ? 0.63 : 0.72) * Math.sqrt(labelScaleBase),
+    labelFontSize,
     labelOffsetY:
       Number.isFinite(Number(style.labelOffsetY)) &&
       Number(style.labelOffsetY) > 0
@@ -858,18 +863,10 @@ function getAnchorRenderStyle(anchor, isCamera = false) {
         : isCamera
           ? 0.52
           : 0.42,
+    iconSizeAttenuation: Boolean(style.iconSizeAttenuation),
     showLabel: style.showLabel !== false,
     markerColor: resolveAnchorColor(style.color, fallbackColor),
-    strokeColor: style.strokeColor || "",
-    backgroundColor: style.backgroundColor || "",
-    textColor: style.textColor || "",
-    borderWidth:
-      Number.isFinite(Number(style.borderWidth)) &&
-      Number(style.borderWidth) > 0
-        ? Number(style.borderWidth)
-        : isCamera
-          ? 3
-          : 4
+    labelColor: style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff")
   };
 }
 
@@ -937,6 +934,7 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
       scaleX: renderStyle.markerSize,
       scaleY: renderStyle.markerSize,
       color: renderStyle.markerColor,
+      sizeAttenuation: renderStyle.iconSizeAttenuation,
       center: [0.5, 0.0]
     });
     if (cameraSprite) {
@@ -966,12 +964,12 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
             minWidth: 220,
             maxWidth: 360,
             minHeight: 55,
-            backgroundColor:
-              renderStyle.backgroundColor || "rgba(18, 38, 84, 0.82)",
-            strokeColor: renderStyle.strokeColor || "#69b7ff",
-            textColor: renderStyle.textColor || "#e6f4ff",
-            borderWidth: renderStyle.borderWidth,
+            backgroundColor: "rgba(18, 38, 84, 0.82)",
+            strokeColor: "#69b7ff",
+            textColor: renderStyle.labelColor,
+            borderWidth: 3,
             fontSize: renderStyle.labelFontSize,
+            sizeAttenuation: false,
             center: [0.5, 0],
             scaleX: renderStyle.labelScaleX,
             scaleY: renderStyle.labelScaleY
@@ -979,11 +977,12 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
         : {
             width: 280,
             height: 96,
-            backgroundColor: renderStyle.backgroundColor || undefined,
-            strokeColor: renderStyle.strokeColor || undefined,
-            textColor: renderStyle.textColor || undefined,
-            borderWidth: renderStyle.borderWidth,
+            backgroundColor: "rgba(15, 23, 42, 0.82)",
+            strokeColor: undefined,
+            textColor: renderStyle.labelColor,
+            borderWidth: 4,
             fontSize: renderStyle.labelFontSize,
+            sizeAttenuation: false,
             scaleX: renderStyle.labelScaleX,
             scaleY: renderStyle.labelScaleY
           }
@@ -1084,10 +1083,11 @@ function setLinkedPointsVisible(visible) {
 }
 
 function setLinkedPoints(points = []) {
+  linkedPoints = Array.isArray(points) ? points : [];
   clearLinkedPoints();
   linkedPointGroup.visible = linkedPointVisible;
 
-  points.forEach(point => {
+  linkedPoints.forEach(point => {
     const position = point?.targetUuid
       ? getObjectWorldPositionByUUID(point.targetUuid)
       : Array.isArray(point?.position)
@@ -2471,6 +2471,9 @@ function handleResize() {
   orthographicCamera.updateProjectionMatrix();
 
   measureTool?.resize(width, height);
+  renderSceneAnchors();
+  renderCameraAnchors();
+  setLinkedPoints(linkedPoints);
 }
 
 function mountRenderer() {
