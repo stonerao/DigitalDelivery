@@ -145,7 +145,7 @@ const materialThemeOptions = [
         <span class="font-semibold">质量与材质</span>
       </template>
 
-      <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div class="flex flex-col gap-4">
         <div>
           <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
             质量档

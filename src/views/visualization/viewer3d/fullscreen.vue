@@ -4568,8 +4568,8 @@ onBeforeUnmount(() => {
         />
 
         <div v-show="showSidePanel" class="dd-side-panel">
-          <el-card shadow="never" class="h-full">
-            <el-tabs v-model="activeSideTab" class="dd-side-tabs h-full">
+          <el-card shadow="never" class="h-full body-no-padding">
+            <el-tabs v-model="activeSideTab" tab-position="right" class="dd-side-tabs h-full">
               <el-tab-pane label="导航" name="navigation">
                 <NavigationPanel
                   ref="layerTreeRef"
@@ -5610,7 +5610,7 @@ onBeforeUnmount(() => {
   --dd-topbar-height: 52px;
   --dd-panels-top: 64px;
   --dd-bottom-reserve: 120px;
-  --dd-panel-width: 360px;
+  --dd-panel-width: 420px; /* 原本360px，由于增加了垂直标签栏，拓宽以防止内容挤压 */
 }
 
 .dd-topbar {
@@ -5638,8 +5638,37 @@ onBeforeUnmount(() => {
   box-shadow: var(--el-box-shadow-light);
 }
 
+.dd-side-panel :deep(.el-card__body) {
+  padding: 20px 0 20px 20px; /* remove right padding */
+  height: 100%;
+  box-sizing: border-box;
+}
+
 .dd-side-tabs :deep(.el-tabs__content) {
-  height: calc(100% - 40px);
+  height: 100%;
+  padding-right: 12px; /* 给内层卡片预留一点空白以防贴近文字栏边缘 */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar) {
+  width: 4px;
+}
+
+.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar-thumb) {
+  background: var(--el-border-color-dark);
+  border-radius: 4px;
+}
+
+.dd-side-tabs.el-tabs--right :deep(.el-tabs__item) {
+  height: auto !important;
+  padding: 16px 8px !important;
+  writing-mode: vertical-rl;
+  letter-spacing: 4px;
+}
+
+.dd-side-tabs.el-tabs--right :deep(.el-tabs__item.is-active) {
+  font-weight: bold;
 }
 
 .dd-side-tabs :deep(.el-tab-pane) {
