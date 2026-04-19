@@ -18,9 +18,6 @@ import {
   deleteRelationRecordsByTarget,
   getRelationRecordDetail,
   getSystemNodeTree,
-  listRelationRecordsBySource,
-  listRelationRecordsBySourceAndType,
-  listRelationRecordsByTarget,
   pageQueryRelationRecords,
   updateRelationRecord
 } from "@/api/searchNav";
@@ -38,21 +35,13 @@ defineOptions({
 const router = useRouter();
 
 const form = reactive({
-  queryMode: "page",
   keyword: "",
   type: "",
-  sourceKind: "node",
+  sourceKind: "",
   sourceId: "",
-  targetKind: "doc",
+  targetKind: "",
   targetId: ""
 });
-
-const queryModes = [
-  { label: "分页查询", value: "page" },
-  { label: "按来源查询", value: "bySource" },
-  { label: "按目标查询", value: "byTarget" },
-  { label: "按来源+类型查询", value: "bySourceAndType" }
-];
 
 const relTypes = [
   { label: "全部", value: "" },
@@ -243,61 +232,23 @@ function resolveRelationName(kind, id) {
 async function fetchRelationRecords() {
   listLoading.value = true;
   try {
-    let records = [];
-    if (form.queryMode === "page") {
-      const response = await pageQueryRelationRecords({
-        type: form.type || undefined,
-        sourceKind: form.sourceKind || undefined,
-        sourceId: form.sourceId || undefined,
-        targetKind: form.targetKind || undefined,
-        targetId: form.targetId || undefined,
-        page: pagination.page,
-        size: pagination.size
-      });
-      console.log(
-        "[search-nav/relationships] relationRecords.pageQuery:",
-        response
-      );
-      records = Array.isArray(response?.data?.records)
-        ? response.data.records
-        : [];
-      total.value = Number(response?.data?.total || 0);
-    } else if (form.queryMode === "bySource") {
-      const response = await listRelationRecordsBySource({
-        sourceKind: form.sourceKind,
-        sourceId: form.sourceId
-      });
-      console.log(
-        "[search-nav/relationships] relationRecords.bySource:",
-        response
-      );
-      records = Array.isArray(response?.data) ? response.data : [];
-      total.value = records.length;
-    } else if (form.queryMode === "byTarget") {
-      const response = await listRelationRecordsByTarget({
-        targetKind: form.targetKind,
-        targetId: form.targetId
-      });
-      console.log(
-        "[search-nav/relationships] relationRecords.byTarget:",
-        response
-      );
-      records = Array.isArray(response?.data) ? response.data : [];
-      total.value = records.length;
-    } else if (form.queryMode === "bySourceAndType") {
-      const response = await listRelationRecordsBySourceAndType({
-        sourceKind: form.sourceKind,
-        sourceId: form.sourceId,
-        type: form.type
-      });
-      console.log(
-        "[search-nav/relationships] relationRecords.bySourceAndType:",
-        response
-      );
-      records = Array.isArray(response?.data) ? response.data : [];
-      total.value = records.length;
-    }
-    relationRows.value = records;
+    const response = await pageQueryRelationRecords({
+      type: form.type || undefined,
+      sourceKind: form.sourceKind || undefined,
+      sourceId: form.sourceId || undefined,
+      targetKind: form.targetKind || undefined,
+      targetId: form.targetId || undefined,
+      page: pagination.page,
+      size: pagination.size
+    });
+    console.log(
+      "[search-nav/relationships] relationRecords.pageQuery:",
+      response
+    );
+    relationRows.value = Array.isArray(response?.data?.records)
+      ? response.data.records
+      : [];
+    total.value = Number(response?.data?.total || 0);
   } catch (error) {
     console.error("[search-nav/relationships] relation query failed:", error);
     relationRows.value = [];
@@ -485,7 +436,6 @@ const targetOptions = computed(() => {
 
 const querySourceOptions = computed(() => getKindOptions(form.sourceKind));
 const queryTargetOptions = computed(() => getKindOptions(form.targetKind));
-const showPagination = computed(() => form.queryMode === "page");
 const canDeleteBySource = computed(() => {
   return Boolean(form.sourceKind && form.sourceId);
 });
@@ -537,14 +487,15 @@ function handleSelectionChange(rows) {
   selectedRows.value = rows;
 }
 
-function resetQueryByMode() {
-  if (form.queryMode === "page") return;
-  if (form.queryMode === "bySource" || form.queryMode === "bySourceAndType") {
-    form.targetId = "";
-  }
-  if (form.queryMode === "byTarget") {
-    form.sourceId = "";
-  }
+async function resetForm() {
+  form.keyword = "";
+  form.type = "";
+  form.sourceKind = "";
+  form.sourceId = "";
+  form.targetKind = "";
+  form.targetId = "";
+  pagination.page = 1;
+  await fetchRelationRecords();
 }
 
 async function batchDeleteRows() {
@@ -703,24 +654,11 @@ onMounted(async () => {
   <div class="dd-page">
     <el-card shadow="never" class="mb-4">
       <el-form :inline="true" :model="form">
-        <el-form-item label="查询模式">
-          <el-select
-            v-model="form.queryMode"
-            style="width: 180px"
-            @change="resetQueryByMode"
-          >
-            <el-option
-              v-for="item in queryModes"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-        </el-form-item>
         <el-form-item label="关系类型">
           <el-select
             v-model="form.type"
             style="width: 180px"
+            clearable
             @change="handleSearch"
           >
             <el-option
@@ -731,8 +669,13 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.queryMode !== 'byTarget'" label="来源类型">
-          <el-select v-model="form.sourceKind" style="width: 140px">
+        <el-form-item label="来源类型">
+          <el-select
+            v-model="form.sourceKind"
+            style="width: 140px"
+            clearable
+            @change="form.sourceId = ''"
+          >
             <el-option
               v-for="item in kindOptions.filter(item =>
                 ['node', 'kks'].includes(item.value)
@@ -743,7 +686,7 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.queryMode !== 'byTarget'" label="来源对象">
+        <el-form-item label="来源对象">
           <el-tree-select
             v-if="form.sourceKind === 'node'"
             v-model="form.sourceId"
@@ -760,6 +703,7 @@ onMounted(async () => {
             style="width: 220px"
             filterable
             clearable
+            :disabled="!form.sourceKind"
           >
             <el-option
               v-for="item in querySourceOptions"
@@ -769,11 +713,13 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item
-          v-if="form.queryMode === 'page' || form.queryMode === 'byTarget'"
-          label="目标类型"
-        >
-          <el-select v-model="form.targetKind" style="width: 140px">
+        <el-form-item label="目标类型">
+          <el-select
+            v-model="form.targetKind"
+            style="width: 140px"
+            clearable
+            @change="form.targetId = ''"
+          >
             <el-option
               v-for="item in kindOptions"
               :key="item.value"
@@ -782,10 +728,7 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item
-          v-if="form.queryMode === 'page' || form.queryMode === 'byTarget'"
-          label="目标对象"
-        >
+        <el-form-item label="目标对象">
           <el-tree-select
             v-if="form.targetKind === 'node'"
             v-model="form.targetId"
@@ -802,6 +745,7 @@ onMounted(async () => {
             style="width: 220px"
             filterable
             clearable
+            :disabled="!form.targetKind"
           >
             <el-option
               v-for="item in queryTargetOptions"
@@ -814,7 +758,7 @@ onMounted(async () => {
         <el-form-item label="关键字">
           <el-input
             v-model="form.keyword"
-            placeholder="来源/目标/ID"
+            placeholder="页内筛选：来源/目标/ID"
             style="width: 260px"
             clearable
           />
@@ -823,6 +767,7 @@ onMounted(async () => {
           <el-space wrap>
             <el-button type="primary" @click="openCreate">新增关系</el-button>
             <el-button type="primary" @click="handleSearch">查询</el-button>
+            <el-button @click="resetForm">重置</el-button>
             <el-button @click="batchDeleteRows">批量删除</el-button>
             <el-button :disabled="!canDeleteBySource" @click="deleteBySource">
               按来源删除
@@ -888,7 +833,7 @@ onMounted(async () => {
         </el-table-column>
       </el-table>
 
-      <div v-if="showPagination" class="flex justify-end mt-4">
+      <div class="flex justify-end mt-4">
         <el-pagination
           background
           layout="total, sizes, prev, pager, next"

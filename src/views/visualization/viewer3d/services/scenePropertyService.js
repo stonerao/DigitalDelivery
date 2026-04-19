@@ -94,9 +94,5 @@ export function confirmPropertyDialog({
       device.type = "";
     }
   }
-
-  notify?.(mode === "bind" ? "业务数据已绑定" : "业务数据已更新", {
-    type: "success"
-  });
   return true;
 }

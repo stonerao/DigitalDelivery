@@ -23,6 +23,13 @@ import {
   getHandoverProjectDetail,
   updateHandoverProject
 } from "@/api/handoverProjects";
+import {
+  createRelationRecord,
+  deleteRelationRecord,
+  listRelationRecordsBySourceAndType,
+  pageQueryRelationRecords,
+  updateRelationRecord
+} from "@/api/searchNav";
 import { createViewerAdapter } from "@/3d/runtime/adapter/viewerAdapter";
 import { createVideoAdapter } from "@/3d/runtime/cameras/videoAdapter";
 import { createRuntimeEventBus } from "@/3d/runtime/events/runtimeEventBus";
@@ -330,6 +337,20 @@ const nodeDocumentTargetId = ref("");
 const nodeDocumentTargetLabel = ref("");
 const nodeDocumentSelectedDocuments = ref([]);
 const nodeDocumentTableRef = ref(null);
+const objectDocumentDialogVisible = ref(false);
+const objectDocumentDialogMode = ref("bind");
+const objectDocumentDialogLoading = ref(false);
+const objectDocumentDialogKeyword = ref("");
+const objectDocumentDialogRecords = ref([]);
+const objectDocumentDialogPagination = ref({
+  page: 1,
+  size: 20,
+  total: 0
+});
+const objectDocumentTargetUuid = ref("");
+const objectDocumentTargetLabel = ref("");
+const objectDocumentSelectedDocuments = ref([]);
+const objectDocumentTableRef = ref(null);
 
 const activeModelDetail = ref(null);
 
@@ -406,20 +427,55 @@ function buildObjectBindingNameKey(instanceId = "", name = "") {
   return `${String(instanceId || "").trim()}::${normalizeBindingText(name)}`;
 }
 
+const MODEL_OBJECT_SOURCE_KIND = "model_object";
+const MODEL_OBJECT_DOC_RELATION_TYPE = "model_object_doc";
+const MODEL_OBJECT_KKS_RELATION_TYPE = "model_object_kks";
+
+function buildModelObjectSourceId({
+  instanceId = "",
+  objectUuid = "",
+  uuid = ""
+} = {}) {
+  const normalizedInstanceId = String(instanceId || "").trim();
+  const normalizedObjectUuid = String(objectUuid || uuid || "").trim();
+  if (!normalizedInstanceId || !normalizedObjectUuid) return "";
+  return `${normalizedInstanceId}:${normalizedObjectUuid}`;
+}
+
 function normalizeSavedObjectBinding(item) {
   const objectUuid = String(item?.objectUuid || item?.uuid || "").trim();
   const objectName = String(item?.objectName || item?.name || "").trim();
   const path = String(item?.path || "").trim();
   if (!objectUuid && !objectName && !path) return null;
   const businessBinding = item?.businessBinding || {};
+  const documentBindings = Array.isArray(item?.documentBindings)
+    ? item.documentBindings
+    : Array.isArray(item?.documents)
+      ? item.documents
+      : [];
   return {
     instanceId: String(item?.instanceId || "").trim(),
+    sourceId:
+      String(item?.sourceId || "").trim() ||
+      buildModelObjectSourceId({
+        instanceId: item?.instanceId,
+        objectUuid
+      }),
     objectUuid,
     objectName,
     path,
     meshUuids: Array.isArray(item?.meshUuids) ? item.meshUuids : [],
     kks: String(businessBinding?.kks || item?.kks || "").trim(),
-    nodeId: String(businessBinding?.nodeId || item?.nodeId || "").trim()
+    nodeId: String(businessBinding?.nodeId || item?.nodeId || "").trim(),
+    kksRelationId: String(item?.kksRelationId || item?.relationId || "").trim(),
+    documentRelationIds: Array.isArray(item?.documentRelationIds)
+      ? item.documentRelationIds
+          .map(id => String(id || "").trim())
+          .filter(Boolean)
+      : [],
+    boundDocuments: documentBindings
+      .map(normalizeNodeBoundDocument)
+      .filter(Boolean)
   };
 }
 
@@ -484,6 +540,164 @@ function normalizeNodeBoundDocuments(items) {
       uniqueMap.set(item.id, item);
     });
   return Array.from(uniqueMap.values());
+}
+
+function getSceneDeviceSourceId(item) {
+  return buildModelObjectSourceId({
+    instanceId: item?.instanceId,
+    objectUuid: item?.objectUuid || item?.uuid
+  });
+}
+
+function getSceneDeviceBySourceId(sourceId) {
+  const key = String(sourceId || "").trim();
+  if (!key) return null;
+  return (
+    sceneDevices.value.find(item => getSceneDeviceSourceId(item) === key) ||
+    null
+  );
+}
+
+function applySceneDeviceBindingPatch(sourceId, patch = {}) {
+  const target = getSceneDeviceBySourceId(sourceId);
+  if (!target) return false;
+  Object.assign(target, patch);
+  if (!Array.isArray(target.boundDocuments)) {
+    target.boundDocuments = [];
+  }
+  if (!Array.isArray(target.documentRelationIds)) {
+    target.documentRelationIds = [];
+  }
+  return true;
+}
+
+async function listModelObjectRelationsBySourceAndType(sourceId, type) {
+  if (!sourceId || !type) return [];
+  const response = await listRelationRecordsBySourceAndType({
+    sourceKind: MODEL_OBJECT_SOURCE_KIND,
+    sourceId,
+    type
+  });
+  return Array.isArray(response?.data) ? response.data : [];
+}
+
+async function fetchDocumentOptionsByIds(ids = []) {
+  const normalizedIds = Array.from(
+    new Set(ids.map(id => String(id || "").trim()).filter(Boolean))
+  );
+  if (!normalizedIds.length) return [];
+  const data = unwrapApiData(
+    await getHandoverDocumentList({
+      searchMode: "fuzzy",
+      recycleBin: false,
+      page: 1,
+      size: Math.max(100, normalizedIds.length * 2)
+    }),
+    "加载文档列表失败"
+  );
+  const records = Array.isArray(data?.records) ? data.records : [];
+  const map = new Map(
+    records
+      .map(item => {
+        const normalized = normalizeNodeDocumentOption(item);
+        return normalized ? [normalized.id, normalized] : null;
+      })
+      .filter(Boolean)
+  );
+  return normalizedIds.map(
+    id => map.get(id) || { id, name: id, type: "", updatedAt: "" }
+  );
+}
+
+async function syncSceneObjectRelationsFromBackend() {
+  const sourceIds = sceneDevices.value
+    .map(item => getSceneDeviceSourceId(item))
+    .filter(Boolean);
+  if (!sourceIds.length) return;
+
+  try {
+    const response = await pageQueryRelationRecords({
+      sourceKind: MODEL_OBJECT_SOURCE_KIND,
+      page: 1,
+      size: Math.max(1000, sourceIds.length * 4)
+    });
+    const records = Array.isArray(response?.data?.records)
+      ? response.data.records
+      : [];
+    const sourceIdSet = new Set(sourceIds);
+    const matched = records.filter(item =>
+      sourceIdSet.has(String(item?.sourceId || "").trim())
+    );
+
+    const documentIds = Array.from(
+      new Set(
+        matched
+          .filter(item => item?.type === MODEL_OBJECT_DOC_RELATION_TYPE)
+          .map(item => String(item?.targetId || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const documentOptions = await fetchDocumentOptionsByIds(documentIds);
+    const documentMap = new Map(documentOptions.map(item => [item.id, item]));
+
+    const relationMap = new Map();
+    matched.forEach(item => {
+      const sourceId = String(item?.sourceId || "").trim();
+      if (!sourceId) return;
+      const current = relationMap.get(sourceId) || {
+        kks: "",
+        nodeId: "",
+        kksRelationId: "",
+        documentRelationIds: [],
+        boundDocuments: []
+      };
+
+      if (item?.type === MODEL_OBJECT_KKS_RELATION_TYPE) {
+        const kks = String(item?.targetId || "").trim();
+        current.kks = kks;
+        current.nodeId = buildNodeIdByKks(kks) || current.nodeId || "";
+        current.kksRelationId = String(item?.id || "").trim();
+      }
+
+      if (item?.type === MODEL_OBJECT_DOC_RELATION_TYPE) {
+        const documentId = String(item?.targetId || "").trim();
+        if (documentId) {
+          current.documentRelationIds.push(String(item?.id || "").trim());
+          current.boundDocuments.push(
+            documentMap.get(documentId) || {
+              id: documentId,
+              name: documentId,
+              type: "",
+              updatedAt: ""
+            }
+          );
+        }
+      }
+
+      relationMap.set(sourceId, current);
+    });
+
+    sceneDevices.value.forEach(item => {
+      const sourceId = getSceneDeviceSourceId(item);
+      const backendBinding = relationMap.get(sourceId);
+      item.sourceId = sourceId;
+      item.kks = backendBinding?.kks || item.kks || "";
+      item.nodeId =
+        backendBinding?.nodeId ||
+        item.nodeId ||
+        buildNodeIdByKks(item.kks || "") ||
+        "";
+      item.kksRelationId = backendBinding?.kksRelationId || "";
+      item.documentRelationIds = backendBinding?.documentRelationIds || [];
+      item.boundDocuments = normalizeNodeBoundDocuments(
+        backendBinding?.boundDocuments || item.boundDocuments || []
+      );
+    });
+
+    syncSavedObjectBindingsFromSceneDevices();
+  } catch (error) {
+    console.error("sync scene object relations failed", error);
+  }
 }
 
 function createNavigationNode(label, parentId = "") {
@@ -2565,9 +2779,20 @@ function refreshSceneDevices() {
     const kks = stored?.kks || item.kks || "";
     return {
       ...item,
+      sourceId:
+        stored?.sourceId ||
+        buildModelObjectSourceId({
+          instanceId: item.instanceId,
+          objectUuid: item.uuid
+        }),
       kks,
       nodeId,
-      systemName
+      systemName,
+      kksRelationId: stored?.kksRelationId || "",
+      documentRelationIds: Array.isArray(stored?.documentRelationIds)
+        ? stored.documentRelationIds
+        : [],
+      boundDocuments: normalizeNodeBoundDocuments(stored?.boundDocuments || [])
     };
   });
   projectStore.setSceneDevices(sceneDevices.value);
@@ -3118,6 +3343,63 @@ function syncNodeDocumentTableSelection() {
   });
 }
 
+async function fetchNodeBoundDocumentsFromBackend(nodeId) {
+  const targetId = String(nodeId || "").trim();
+  if (!targetId) return [];
+  const relations = await listRelationRecordsBySourceAndType({
+    sourceKind: "node",
+    sourceId: targetId,
+    type: "node_doc"
+  });
+  const relationRows = Array.isArray(relations?.data) ? relations.data : [];
+  const documentIds = Array.from(
+    new Set(
+      relationRows
+        .map(item => String(item?.targetId || "").trim())
+        .filter(Boolean)
+    )
+  );
+  return await fetchDocumentOptionsByIds(documentIds);
+}
+
+async function replaceNodeDocumentRelations(nodeId, documents = []) {
+  const targetId = String(nodeId || "").trim();
+  if (!targetId) return [];
+  const relations = await listRelationRecordsBySourceAndType({
+    sourceKind: "node",
+    sourceId: targetId,
+    type: "node_doc"
+  });
+  const currentRows = Array.isArray(relations?.data) ? relations.data : [];
+  const nextDocs = normalizeNodeBoundDocuments(documents);
+  const nextDocIdSet = new Set(nextDocs.map(item => item.id));
+
+  await Promise.all(
+    currentRows
+      .filter(item => !nextDocIdSet.has(String(item?.targetId || "").trim()))
+      .map(item => String(item?.id || "").trim())
+      .filter(Boolean)
+      .map(id => deleteRelationRecord(id))
+  );
+
+  const currentDocIdSet = new Set(
+    currentRows.map(item => String(item?.targetId || "").trim()).filter(Boolean)
+  );
+
+  for (const doc of nextDocs) {
+    if (currentDocIdSet.has(doc.id)) continue;
+    await createRelationRecord({
+      type: "node_doc",
+      sourceKind: "node",
+      sourceId: targetId,
+      targetKind: "doc",
+      targetId: doc.id
+    });
+  }
+
+  return nextDocs;
+}
+
 async function loadNodeDocumentOptions(keyword = "") {
   nodeDocumentDialogLoading.value = true;
   try {
@@ -3153,7 +3435,7 @@ async function loadNodeDocumentOptions(keyword = "") {
   }
 }
 
-function openNodeDocumentDialog(mode = "bind") {
+async function openNodeDocumentDialog(mode = "bind") {
   const targetId = String(
     ctxMenuNode.value?.nodeId || ctxMenuNode.value?.id || ""
   ).trim();
@@ -3174,6 +3456,14 @@ function openNodeDocumentDialog(mode = "bind") {
   nodeDocumentDialogVisible.value = true;
   ctxMenuVisible.value = false;
 
+  try {
+    const boundDocuments = await fetchNodeBoundDocumentsFromBackend(targetId);
+    nodeDocumentSelectedDocuments.value = boundDocuments;
+    updateNavigationNodeBoundDocuments(targetId, boundDocuments);
+  } catch (error) {
+    message(error?.message || "加载节点绑定文件失败", { type: "error" });
+  }
+
   if (mode === "bind") {
     nodeDocumentDialogRecords.value = [];
     loadNodeDocumentOptions();
@@ -3181,11 +3471,11 @@ function openNodeDocumentDialog(mode = "bind") {
 }
 
 function onCtxBindDocuments() {
-  openNodeDocumentDialog("bind");
+  void openNodeDocumentDialog("bind");
 }
 
 function onCtxViewDocuments() {
-  openNodeDocumentDialog("view");
+  void openNodeDocumentDialog("view");
 }
 
 function handleNodeDocumentSelectionChange(selection = []) {
@@ -3217,14 +3507,134 @@ async function onNodeDocumentSizeChange(size) {
   await loadNodeDocumentOptions(nodeDocumentDialogKeyword.value);
 }
 
-function confirmNodeDocumentDialog() {
+async function confirmNodeDocumentDialog() {
   if (!nodeDocumentTargetId.value) return;
-  updateNavigationNodeBoundDocuments(
-    nodeDocumentTargetId.value,
-    nodeDocumentSelectedDocuments.value
+  try {
+    const nextDocuments = await replaceNodeDocumentRelations(
+      nodeDocumentTargetId.value,
+      nodeDocumentSelectedDocuments.value
+    );
+    updateNavigationNodeBoundDocuments(
+      nodeDocumentTargetId.value,
+      nextDocuments
+    );
+    nodeDocumentDialogVisible.value = false;
+    message("节点文件绑定已保存", { type: "success" });
+  } catch (error) {
+    message(error?.message || "提交节点文件绑定失败", { type: "error" });
+  }
+}
+
+function syncObjectDocumentTableSelection() {
+  const table = objectDocumentTableRef.value;
+  if (!table) return;
+  const selectedIdSet = new Set(
+    objectDocumentSelectedDocuments.value.map(item => item.id)
   );
-  nodeDocumentDialogVisible.value = false;
-  message("文件绑定已保存", { type: "success" });
+  table.clearSelection();
+  objectDocumentDialogRecords.value.forEach(row => {
+    if (selectedIdSet.has(row.id)) {
+      table.toggleRowSelection(row, true);
+    }
+  });
+}
+
+async function loadObjectDocumentOptions(keyword = "") {
+  objectDocumentDialogLoading.value = true;
+  try {
+    const data = unwrapApiData(
+      await getHandoverDocumentList({
+        searchMode: "fuzzy",
+        keyword: keyword.trim() || undefined,
+        recycleBin: false,
+        page: objectDocumentDialogPagination.value.page,
+        size: objectDocumentDialogPagination.value.size
+      }),
+      "加载文档列表失败"
+    );
+    const records = Array.isArray(data?.records) ? data.records : [];
+    objectDocumentDialogRecords.value = records
+      .map(normalizeNodeDocumentOption)
+      .filter(Boolean);
+    objectDocumentDialogPagination.value.total = Number(data?.total ?? 0);
+    objectDocumentDialogPagination.value.page = Number(
+      data?.page ?? objectDocumentDialogPagination.value.page
+    );
+    objectDocumentDialogPagination.value.size = Number(
+      data?.size ?? objectDocumentDialogPagination.value.size
+    );
+    await nextTick();
+    syncObjectDocumentTableSelection();
+  } catch (error) {
+    objectDocumentDialogRecords.value = [];
+    objectDocumentDialogPagination.value.total = 0;
+    message(error?.message || "加载文档列表失败", { type: "error" });
+  } finally {
+    objectDocumentDialogLoading.value = false;
+  }
+}
+
+function openObjectDocumentDialog(mode = "bind") {
+  const raw = ctxMenuNode.value?.raw || null;
+  const targetUuid = String(raw?.uuid || "").trim();
+  if (!targetUuid) return;
+  objectDocumentDialogMode.value = mode;
+  objectDocumentTargetUuid.value = targetUuid;
+  objectDocumentTargetLabel.value = String(
+    raw?.name ||
+      ctxMenuNode.value?.label ||
+      ctxMenuNode.value?.name ||
+      "当前构件"
+  ).trim();
+  objectDocumentDialogKeyword.value = "";
+  objectDocumentDialogPagination.value.page = 1;
+  objectDocumentSelectedDocuments.value = normalizeNodeBoundDocuments(
+    raw?.boundDocuments || []
+  );
+  objectDocumentDialogVisible.value = true;
+  ctxMenuVisible.value = false;
+
+  if (mode === "bind") {
+    objectDocumentDialogRecords.value = [];
+    loadObjectDocumentOptions();
+  }
+}
+
+function onCtxBindObjectDocuments() {
+  openObjectDocumentDialog("bind");
+}
+
+function onCtxViewObjectDocuments() {
+  openObjectDocumentDialog("view");
+}
+
+function handleObjectDocumentSelectionChange(selection = []) {
+  const normalizedSelection = selection
+    .map(normalizeNodeDocumentOption)
+    .filter(Boolean);
+  const currentPageIds = objectDocumentDialogRecords.value.map(item => item.id);
+  objectDocumentSelectedDocuments.value = mergeSelectedNodeDocuments(
+    objectDocumentSelectedDocuments.value,
+    normalizedSelection,
+    currentPageIds
+  );
+}
+
+async function searchObjectDocuments(keyword) {
+  objectDocumentDialogKeyword.value = String(keyword || "");
+  objectDocumentDialogPagination.value.page = 1;
+  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
+}
+
+async function onObjectDocumentPageChange(page) {
+  objectDocumentDialogPagination.value.page = Math.max(1, page);
+  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
+}
+
+async function onObjectDocumentSizeChange(size) {
+  objectDocumentDialogPagination.value.size = size;
+  objectDocumentDialogPagination.value.page = 1;
+  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
 }
 
 const propDialogVisible = ref(false);
@@ -3378,12 +3788,32 @@ async function onCtxEditProp() {
   await openPropertyDialog("edit");
 }
 
-function onCtxClearProp() {
+async function onCtxClearProp() {
   ctxMenuVisible.value = false;
-  const cleared = clearNodeProperty(ctxMenuNode.value, sceneDevices.value);
-  if (cleared) {
-    syncSavedObjectBindingsFromSceneDevices();
-    message("已清空该构件属性", { type: "success" });
+  const raw = ctxMenuNode.value?.raw || null;
+  const sourceId = getSceneDeviceSourceId(raw);
+  try {
+    if (sourceId) {
+      await upsertSceneObjectKksRelation({
+        sourceId,
+        kks: "",
+        relationId: raw?.kksRelationId || ""
+      });
+    }
+    const cleared = clearNodeProperty(ctxMenuNode.value, sceneDevices.value);
+    if (cleared && sourceId) {
+      applySceneDeviceBindingPatch(sourceId, {
+        kks: "",
+        nodeId: "",
+        kksRelationId: ""
+      });
+    }
+    if (cleared) {
+      syncSavedObjectBindingsFromSceneDevices();
+      message("已清空该构件属性", { type: "success" });
+    }
+  } catch (error) {
+    message(error?.message || "解除业务数据绑定失败", { type: "error" });
   }
 }
 
@@ -3398,15 +3828,28 @@ const propDialogTitle = computed(() => {
 
 function syncSavedObjectBindingsFromSceneDevices() {
   savedObjectBindings.value = sceneDevices.value
-    .filter(item => item?.uuid && (item.kks || item.nodeId))
+    .filter(
+      item =>
+        item?.uuid &&
+        (item.kks ||
+          item.nodeId ||
+          (Array.isArray(item.boundDocuments) &&
+            item.boundDocuments.length > 0))
+    )
     .map(item => ({
       instanceId: item.instanceId || "",
+      sourceId: getSceneDeviceSourceId(item),
       objectUuid: item.uuid,
       meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
       objectName: item.name || "",
       path: item.path || "",
       kks: item.kks || "",
-      nodeId: item.nodeId || ""
+      nodeId: item.nodeId || "",
+      kksRelationId: item.kksRelationId || "",
+      documentRelationIds: Array.isArray(item.documentRelationIds)
+        ? item.documentRelationIds
+        : [],
+      boundDocuments: normalizeNodeBoundDocuments(item.boundDocuments || [])
     }));
 
   const nextPackage = patchProjectPackage(
@@ -3428,6 +3871,9 @@ function syncSavedObjectBindingsFromSceneDevices() {
               tag: "",
               bindingType: item.kks ? "device" : "custom"
             },
+            documentBindings: normalizeNodeBoundDocuments(
+              item.boundDocuments || []
+            ),
             properties: {}
           }))
         }
@@ -3438,7 +3884,105 @@ function syncSavedObjectBindingsFromSceneDevices() {
   projectStore.setProjectPackage(nextPackage);
 }
 
-function confirmPropDialog() {
+async function upsertSceneObjectKksRelation({
+  sourceId,
+  kks,
+  relationId = ""
+}) {
+  const currentRelations = await listModelObjectRelationsBySourceAndType(
+    sourceId,
+    MODEL_OBJECT_KKS_RELATION_TYPE
+  );
+  const normalizedKks = String(kks || "").trim();
+
+  if (!normalizedKks) {
+    await Promise.all(
+      currentRelations
+        .map(item => String(item?.id || "").trim())
+        .filter(Boolean)
+        .map(id => deleteRelationRecord(id))
+    );
+    return "";
+  }
+
+  let primaryRelationId =
+    relationId || String(currentRelations[0]?.id || "").trim();
+  const payload = {
+    type: MODEL_OBJECT_KKS_RELATION_TYPE,
+    sourceKind: MODEL_OBJECT_SOURCE_KIND,
+    sourceId,
+    targetKind: "kks",
+    targetId: normalizedKks
+  };
+
+  if (primaryRelationId) {
+    await updateRelationRecord({
+      id: primaryRelationId,
+      ...payload
+    });
+  } else {
+    await createRelationRecord(payload);
+    const refreshed = await listModelObjectRelationsBySourceAndType(
+      sourceId,
+      MODEL_OBJECT_KKS_RELATION_TYPE
+    );
+    primaryRelationId = String(refreshed[0]?.id || "").trim();
+  }
+
+  await Promise.all(
+    currentRelations
+      .slice(primaryRelationId ? 1 : 0)
+      .map(item => String(item?.id || "").trim())
+      .filter(Boolean)
+      .map(id => deleteRelationRecord(id))
+  );
+
+  return primaryRelationId;
+}
+
+async function replaceSceneObjectDocumentRelations({
+  sourceId,
+  documents = []
+}) {
+  const currentRelations = await listModelObjectRelationsBySourceAndType(
+    sourceId,
+    MODEL_OBJECT_DOC_RELATION_TYPE
+  );
+  const currentMap = new Map(
+    currentRelations.map(item => [String(item?.targetId || "").trim(), item])
+  );
+  const nextDocs = normalizeNodeBoundDocuments(documents);
+  const nextIdSet = new Set(nextDocs.map(item => item.id));
+
+  await Promise.all(
+    currentRelations
+      .filter(item => !nextIdSet.has(String(item?.targetId || "").trim()))
+      .map(item => String(item?.id || "").trim())
+      .filter(Boolean)
+      .map(id => deleteRelationRecord(id))
+  );
+
+  for (const doc of nextDocs) {
+    if (currentMap.has(doc.id)) continue;
+    await createRelationRecord({
+      type: MODEL_OBJECT_DOC_RELATION_TYPE,
+      sourceKind: MODEL_OBJECT_SOURCE_KIND,
+      sourceId,
+      targetKind: "doc",
+      targetId: doc.id
+    });
+  }
+
+  const refreshedRelations = await listModelObjectRelationsBySourceAndType(
+    sourceId,
+    MODEL_OBJECT_DOC_RELATION_TYPE
+  );
+  return refreshedRelations
+    .map(item => String(item?.id || "").trim())
+    .filter(Boolean);
+}
+
+async function confirmPropDialog() {
   const confirmed = confirmScenePropertyDialog({
     mode: propDialogMode.value,
     form: propEditForm.value,
@@ -3447,8 +3991,71 @@ function confirmPropDialog() {
     notify: message
   });
   if (!confirmed) return;
+  const raw = ctxMenuNode.value?.raw || null;
+  const sourceId = getSceneDeviceSourceId(raw);
+  if (!sourceId) {
+    message("当前构件缺少绑定标识，无法提交后端", { type: "error" });
+    return;
+  }
+  try {
+    const kksRelationId = await upsertSceneObjectKksRelation({
+      sourceId,
+      kks: propEditForm.value.kks,
+      relationId: raw?.kksRelationId || ""
+    });
+    applySceneDeviceBindingPatch(sourceId, {
+      sourceId,
+      kks: propEditForm.value.kks || "",
+      nodeId:
+        propEditForm.value.nodeId ||
+        buildNodeIdByKks(propEditForm.value.kks) ||
+        "",
+      kksRelationId
+    });
+    message(
+      propDialogMode.value === "bind" ? "业务数据已绑定" : "业务数据已更新",
+      {
+        type: "success"
+      }
+    );
+  } catch (error) {
+    message(error?.message || "提交业务数据绑定失败", { type: "error" });
+    return;
+  }
   syncSavedObjectBindingsFromSceneDevices();
   propDialogVisible.value = false;
+}
+
+async function confirmObjectDocumentDialog() {
+  const raw = ctxMenuNode.value?.raw || null;
+  const sourceId =
+    getSceneDeviceSourceId(raw) ||
+    buildModelObjectSourceId({
+      instanceId: selectedSceneDevice.value?.instanceId,
+      objectUuid: objectDocumentTargetUuid.value
+    });
+  if (!sourceId) {
+    message("当前构件缺少绑定标识，无法提交后端", { type: "error" });
+    return;
+  }
+  try {
+    const relationIds = await replaceSceneObjectDocumentRelations({
+      sourceId,
+      documents: objectDocumentSelectedDocuments.value
+    });
+    applySceneDeviceBindingPatch(sourceId, {
+      sourceId,
+      boundDocuments: normalizeNodeBoundDocuments(
+        objectDocumentSelectedDocuments.value
+      ),
+      documentRelationIds: relationIds
+    });
+    syncSavedObjectBindingsFromSceneDevices();
+    objectDocumentDialogVisible.value = false;
+    message("构件文档绑定已保存", { type: "success" });
+  } catch (error) {
+    message(error?.message || "提交构件文档绑定失败", { type: "error" });
+  }
 }
 
 async function searchPropertyBindingRecords(keyword) {
@@ -3638,6 +4245,7 @@ function handleViewerLoaded() {
   });
   refreshSceneTree();
   refreshSceneDevices();
+  void syncSceneObjectRelationsFromBackend();
   syncRoamingState();
   syncMeasurementPoints();
   syncMeasurementRecordsToViewer();
@@ -4227,6 +4835,7 @@ onBeforeUnmount(() => {
           :visible="showObjectPanel"
           :selected-object-info="selectedObjectInfo"
           :selected-scene-device="selectedSceneDevice"
+          :selected-bound-documents="selectedSceneDevice?.boundDocuments || []"
           :selected-kks-detail="selectedKksDetail"
           :selected-kks-detail-loading="selectedKksDetailLoading"
           :selected-kks-detail-error="selectedKksDetailError"
@@ -4246,6 +4855,12 @@ onBeforeUnmount(() => {
           <template v-if="ctxMenuIsDevice">
             <div class="dd-nav-ctx-item" @click.stop="onCtxBindProp">
               {{ ctxMenuNode?.raw?.kks ? "更换绑定" : "绑定业务数据" }}
+            </div>
+            <div class="dd-nav-ctx-item" @click.stop="onCtxBindObjectDocuments">
+              绑定文件
+            </div>
+            <div class="dd-nav-ctx-item" @click.stop="onCtxViewObjectDocuments">
+              查看绑定文件
             </div>
             <div
               class="dd-nav-ctx-item dd-nav-ctx-danger"
@@ -4402,6 +5017,118 @@ onBeforeUnmount(() => {
               v-if="nodeDocumentDialogMode === 'bind'"
               type="primary"
               @click="confirmNodeDocumentDialog"
+            >
+              确定
+            </el-button>
+          </template>
+        </el-dialog>
+
+        <el-dialog
+          v-model="objectDocumentDialogVisible"
+          :title="
+            objectDocumentDialogMode === 'view'
+              ? '查看构件绑定文件'
+              : '绑定构件文件'
+          "
+          width="80vw"
+          destroy-on-close
+        >
+          <el-form label-width="90px" class="pr-4">
+            <el-form-item label="当前构件">
+              <el-input
+                :model-value="objectDocumentTargetLabel || '-'"
+                readonly
+              />
+            </el-form-item>
+            <el-form-item label="已绑文档">
+              <div class="w-full text-sm text-gray-500">
+                当前共绑定 {{ objectDocumentSelectedDocuments.length }} 个文档
+              </div>
+            </el-form-item>
+            <template v-if="objectDocumentDialogMode === 'bind'">
+              <el-form-item label="文档搜索">
+                <el-input
+                  v-model="objectDocumentDialogKeyword"
+                  clearable
+                  placeholder="搜索文档名称"
+                  @input="searchObjectDocuments(objectDocumentDialogKeyword)"
+                />
+              </el-form-item>
+              <el-form-item label="文档列表">
+                <div class="w-full">
+                  <el-table
+                    ref="objectDocumentTableRef"
+                    v-loading="objectDocumentDialogLoading"
+                    :data="objectDocumentDialogRecords"
+                    row-key="id"
+                    height="45vh"
+                    @selection-change="handleObjectDocumentSelectionChange"
+                  >
+                    <el-table-column type="selection" width="52" />
+                    <el-table-column
+                      prop="name"
+                      label="文档名称"
+                      min-width="260"
+                      show-overflow-tooltip
+                    />
+                    <el-table-column prop="type" label="类型" width="120" />
+                    <el-table-column
+                      prop="updatedAt"
+                      label="更新时间"
+                      min-width="180"
+                    />
+                  </el-table>
+                  <div class="mt-3 flex justify-end">
+                    <el-pagination
+                      background
+                      layout="total, sizes, prev, pager, next"
+                      :total="objectDocumentDialogPagination.total"
+                      :current-page="objectDocumentDialogPagination.page"
+                      :page-size="objectDocumentDialogPagination.size"
+                      :page-sizes="[20, 50, 100]"
+                      @size-change="onObjectDocumentSizeChange"
+                      @current-change="onObjectDocumentPageChange"
+                    />
+                  </div>
+                </div>
+              </el-form-item>
+            </template>
+            <el-form-item
+              :label="
+                objectDocumentDialogMode === 'view' ? '绑定结果' : '已选文件'
+              "
+            >
+              <div class="w-full">
+                <el-table
+                  :data="objectDocumentSelectedDocuments"
+                  row-key="id"
+                  height="28vh"
+                  empty-text="当前构件尚未绑定文档"
+                >
+                  <el-table-column
+                    prop="name"
+                    label="文档名称"
+                    min-width="260"
+                    show-overflow-tooltip
+                  />
+                  <el-table-column prop="type" label="类型" width="120" />
+                  <el-table-column
+                    prop="updatedAt"
+                    label="更新时间"
+                    min-width="180"
+                  />
+                </el-table>
+              </div>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="objectDocumentDialogVisible = false">
+              {{ objectDocumentDialogMode === "view" ? "关闭" : "取消" }}
+            </el-button>
+            <el-button
+              v-if="objectDocumentDialogMode === 'bind'"
+              type="primary"
+              @click="confirmObjectDocumentDialog"
             >
               确定
             </el-button>

@@ -35,6 +35,10 @@ defineProps({
   pointMarkersVisible: {
     type: Boolean,
     default: true
+  },
+  selectedBoundDocuments: {
+    type: Array,
+    default: () => []
   }
 });
 
@@ -183,6 +187,42 @@ const emit = defineEmits(["close", "update:pointMarkersVisible"]);
               {{ selectedKksDetailError || "当前构件未绑定 KKS 业务数据。" }}
             </div>
           </div>
+        </el-card>
+
+        <el-card shadow="never">
+          <template #header>
+            <span class="text-sm font-semibold">绑定文件</span>
+          </template>
+          <div
+            v-if="selectedBoundDocuments.length"
+            class="text-xs text-[var(--el-text-color-secondary)]"
+          >
+            当前构件已绑定 {{ selectedBoundDocuments.length }} 个文件。
+          </div>
+          <div v-else class="text-sm text-[var(--el-text-color-secondary)]">
+            当前构件未绑定文件。
+          </div>
+          <el-table
+            v-if="selectedBoundDocuments.length"
+            :data="selectedBoundDocuments"
+            size="small"
+            stripe
+            class="mt-3"
+          >
+            <el-table-column
+              prop="name"
+              label="文档名称"
+              min-width="180"
+              show-overflow-tooltip
+            />
+            <el-table-column prop="type" label="类型" width="100" />
+            <el-table-column
+              prop="updatedAt"
+              label="更新时间"
+              min-width="140"
+              show-overflow-tooltip
+            />
+          </el-table>
         </el-card>
 
         <el-card shadow="never">

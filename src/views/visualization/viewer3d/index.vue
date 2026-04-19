@@ -1734,7 +1734,7 @@ watch(
           </el-button>
           <el-select
             v-model="selectedModelIds"
-            class="w-[200px]"
+            class="viewer-model-select"
             size="default"
             :loading="modelListLoading"
             multiple
@@ -1754,7 +1754,7 @@ watch(
           <el-select
             v-if="sceneModels.length > 0"
             v-model="currentModel"
-            class="w-[200px]"
+            class="viewer-model-select"
             size="default"
             placeholder="当前主模型"
           >
@@ -2384,6 +2384,13 @@ watch(
 </template>
 
 <style scoped>
+.viewer-model-select {
+  width: 200px;
+  min-width: 200px;
+  flex: 0 0 200px;
+  --el-select-width: 200px;
+}
+
 .dd-nav-ctx-menu {
   position: fixed;
   z-index: 9999;
