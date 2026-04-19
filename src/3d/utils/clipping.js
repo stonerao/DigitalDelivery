@@ -31,6 +31,7 @@ export class ClippingTool {
     this.scene = scene;
     this.root = root || scene;
     this.bounds = null;
+    this.activeBounds = null;
     this.state = createDefaultClippingState();
     this.helpers = {};
     this.caps = {};
@@ -51,6 +52,7 @@ export class ClippingTool {
     this.dragAxisNormal = new THREE.Vector3();
     this.onChange = null;
     this.feedbackMaterials = new Set();
+    this.materialOverrides = new Map();
     this.stats = {
       enabled: false,
       mode: "single-plane",
@@ -189,8 +191,20 @@ export class ClippingTool {
 
   refreshMaterials() {
     this._resetFeedbackMaterials();
-    const activePlanes = this.renderer?.clippingPlanes || [];
+    const activePlanes = this.state.enabled ? this._getActivePlanes() : [];
     const targetRoot = this.root || this.scene;
+    const clippingRoot = this._resolveClippingRoot();
+    const objectModeActive =
+      this.state.enabled &&
+      this.state.targetMode === "object" &&
+      Boolean(clippingRoot);
+
+    if (objectModeActive) {
+      this._ensureObjectMaterialOverrides(targetRoot);
+    } else {
+      this._restoreMaterialOverrides();
+    }
+
     targetRoot?.traverse?.(obj => {
       if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
         return;
@@ -199,17 +213,33 @@ export class ClippingTool {
       const materials = Array.isArray(obj.material)
         ? obj.material
         : [obj.material];
+      const shouldClip =
+        activePlanes.length > 0 &&
+        (this.state.targetMode !== "object" ||
+          (clippingRoot && this._isDescendantOf(obj, clippingRoot)));
       materials.filter(Boolean).forEach(material => {
-        material.clippingPlanes = activePlanes.length ? activePlanes : null;
-        material.clipShadows = activePlanes.length > 0;
+        material.clippingPlanes = shouldClip ? activePlanes : null;
+        material.clipShadows = shouldClip;
         material.clipIntersection = false;
+        if (objectModeActive && !shouldClip) {
+          material.transparent = true;
+          material.opacity = Math.min(Number(material.opacity ?? 1), 0.12);
+          if (material.depthWrite !== undefined) {
+            material.depthWrite = false;
+          }
+        }
         material.needsUpdate = true;
       });
     });
   }
 
   beginDrag(event, camera, domElement) {
-    if (!this.state.enabled || !this.bounds || !camera || !domElement) {
+    if (
+      !this.state.enabled ||
+      !this._getEffectiveBounds() ||
+      !camera ||
+      !domElement
+    ) {
       return false;
     }
     this.stopAnimation();
@@ -255,7 +285,13 @@ export class ClippingTool {
   }
 
   updateDrag(event, camera, domElement) {
-    if (!this.dragState || !camera || !domElement || !this.bounds) return null;
+    if (
+      !this.dragState ||
+      !camera ||
+      !domElement ||
+      !this._getEffectiveBounds()
+    )
+      return null;
 
     const rect = domElement.getBoundingClientRect();
     this.pointer.set(
@@ -297,6 +333,7 @@ export class ClippingTool {
     this.renderer.localClippingEnabled = false;
     this.renderer.clippingPlanes = [];
     this._resetFeedbackMaterials();
+    this._restoreMaterialOverrides();
     this.refreshMaterials();
     this._removeHelpers();
     this._removeCaps();
@@ -339,7 +376,11 @@ export class ClippingTool {
   }
 
   updateAnimation(deltaSeconds = 0) {
-    if (!this.animation.playing || !this.bounds || !this.state.enabled) {
+    if (
+      !this.animation.playing ||
+      !this._getEffectiveBounds() ||
+      !this.state.enabled
+    ) {
       return false;
     }
 
@@ -359,23 +400,27 @@ export class ClippingTool {
   }
 
   _resolveAxisPosition(axis, normalizedPosition) {
-    if (!this.bounds) return 0;
-    const min = this.bounds.min[axis];
-    const max = this.bounds.max[axis];
+    const bounds = this._getEffectiveBounds();
+    if (!bounds) return 0;
+    const min = bounds.min[axis];
+    const max = bounds.max[axis];
     const span = max - min || 1;
     return min + span * normalizedPosition;
   }
 
   _resolveAxisRatio(axis, worldPosition) {
-    if (!this.bounds) return 0;
-    const min = this.bounds.min[axis];
-    const max = this.bounds.max[axis];
+    const bounds = this._getEffectiveBounds();
+    if (!bounds) return 0;
+    const min = bounds.min[axis];
+    const max = bounds.max[axis];
     const span = max - min || 1;
     return Math.max(0, Math.min(1, (worldPosition - min) / span));
   }
 
   _getEntryCenter(entry) {
-    const center = this.bounds.getCenter(new THREE.Vector3());
+    const bounds = this._getEffectiveBounds();
+    if (!bounds) return new THREE.Vector3();
+    const center = bounds.getCenter(new THREE.Vector3());
     if (entry.key.endsWith("Min")) {
       center[entry.axis] = this.planes[entry.key].constant;
     } else {
@@ -391,7 +436,7 @@ export class ClippingTool {
   }
 
   _applyDragDelta(axisDelta) {
-    if (!this.dragState || !this.bounds) return null;
+    if (!this.dragState || !this._getEffectiveBounds()) return null;
 
     const axis = this.dragState.axis;
     const currentCenter = this._getEntryCenter({
@@ -517,7 +562,7 @@ export class ClippingTool {
   }
 
   _buildActivePlaneEntries() {
-    if (!this.state.enabled || !this.bounds) return [];
+    if (!this.state.enabled || !this._getEffectiveBounds()) return [];
 
     if (this.state.mode === "single-plane") {
       const { axis, position, direction } = this.state.singlePlane;
@@ -557,11 +602,11 @@ export class ClippingTool {
   }
 
   _applyState() {
+    this.activeBounds = this._resolveActiveBounds();
     const activeEntries = this._buildActivePlaneEntries();
-    const activePlanes = activeEntries.map(item => item.plane);
 
     this.renderer.localClippingEnabled = Boolean(this.state.enabled);
-    this.renderer.clippingPlanes = activePlanes;
+    this.renderer.clippingPlanes = [];
     this.refreshMaterials();
     this._updateHelpers(activeEntries);
     this._updateCaps(activeEntries);
@@ -580,14 +625,19 @@ export class ClippingTool {
     };
     const meshStates = [];
 
-    if (!this.root?.traverse || !this.bounds || !this.state.enabled) {
+    const clipRoot = this._resolveClippingRoot();
+    if (
+      !clipRoot?.traverse ||
+      !this._getEffectiveBounds() ||
+      !this.state.enabled
+    ) {
       return {
         stats: result,
         meshStates
       };
     }
 
-    this.root.traverse(obj => {
+    clipRoot.traverse(obj => {
       if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
         return;
       }
@@ -633,7 +683,11 @@ export class ClippingTool {
   _applyFeedback(meshStates = []) {
     this._resetFeedbackMaterials();
 
-    if (!this.state.enabled || this.state.feedbackMode === "none") {
+    if (
+      !this.state.enabled ||
+      this.state.feedbackMode === "none" ||
+      this.state.targetMode === "object"
+    ) {
       return;
     }
 
@@ -834,7 +888,7 @@ export class ClippingTool {
   }
 
   _updatePlaneTransform(mesh, entry, offset = 0) {
-    if (!mesh || !this.bounds) return;
+    if (!mesh || !this._getEffectiveBounds()) return;
     const center = this._getEntryCenter(entry);
     const normal = this._getEntryAxisNormal(entry);
     if (offset) {
@@ -855,7 +909,7 @@ export class ClippingTool {
     const shouldShow =
       this.state.enabled &&
       this.state.capEnabled &&
-      this.bounds &&
+      this._getEffectiveBounds() &&
       activeEntries.length > 0;
 
     if (!shouldShow) {
@@ -863,7 +917,7 @@ export class ClippingTool {
       return;
     }
 
-    const dimensions = this.bounds.getSize(new THREE.Vector3());
+    const dimensions = this._getEffectiveBounds().getSize(new THREE.Vector3());
     const activeKeys = new Set(activeEntries.map(item => item.key));
 
     activeEntries.forEach(entry => {
@@ -888,7 +942,7 @@ export class ClippingTool {
     const shouldShow =
       this.state.enabled &&
       this.state.helpersVisible &&
-      this.bounds &&
+      this._getEffectiveBounds() &&
       activeEntries.length > 0;
 
     if (!shouldShow) {
@@ -897,7 +951,7 @@ export class ClippingTool {
     }
 
     const size = new THREE.Vector3();
-    this.bounds.getSize(size);
+    this._getEffectiveBounds().getSize(size);
     const helperSize = Math.max(size.x, size.y, size.z) * 1.3;
     const activeKeys = new Set(activeEntries.map(item => item.key));
 
@@ -940,6 +994,88 @@ export class ClippingTool {
       disposeHelper(this.caps[key]);
       this.caps[key] = null;
     });
+  }
+
+  _getActivePlanes() {
+    return this.state.enabled
+      ? this._buildActivePlaneEntries().map(item => item.plane)
+      : [];
+  }
+
+  _resolveClippingRoot() {
+    if (this.state.targetMode !== "object") {
+      return this.root || this.scene;
+    }
+    return this._findObjectByUUID(this.state.targetObjectUuid) || null;
+  }
+
+  _resolveActiveBounds() {
+    const clippingRoot = this._resolveClippingRoot();
+    if (
+      this.state.targetMode === "object" &&
+      clippingRoot &&
+      clippingRoot !== this.root &&
+      clippingRoot !== this.scene
+    ) {
+      const box = new THREE.Box3().setFromObject(clippingRoot);
+      if (!box.isEmpty()) return box;
+    }
+    return this.bounds?.clone?.() || this.bounds || null;
+  }
+
+  _getEffectiveBounds() {
+    return this.activeBounds || this._resolveActiveBounds();
+  }
+
+  _findObjectByUUID(uuid) {
+    if (!uuid || !this.root?.traverse) return null;
+    let found = null;
+    this.root.traverse(obj => {
+      if (!found && obj?.uuid === uuid) {
+        found = obj;
+      }
+    });
+    return found;
+  }
+
+  _isDescendantOf(obj, targetRoot) {
+    let current = obj;
+    while (current) {
+      if (current === targetRoot) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  _ensureObjectMaterialOverrides(targetRoot) {
+    targetRoot?.traverse?.(obj => {
+      if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
+        return;
+      }
+      if (this.materialOverrides.has(obj)) {
+        return;
+      }
+      const originalMaterial = obj.material;
+      const overrideMaterial = Array.isArray(originalMaterial)
+        ? originalMaterial.map(item => item?.clone?.() || item)
+        : originalMaterial?.clone?.() || originalMaterial;
+      this.materialOverrides.set(obj, originalMaterial);
+      obj.material = overrideMaterial;
+    });
+  }
+
+  _restoreMaterialOverrides() {
+    this.materialOverrides.forEach((originalMaterial, obj) => {
+      if (!obj) return;
+      const currentMaterial = obj.material;
+      obj.material = originalMaterial;
+      if (Array.isArray(currentMaterial)) {
+        currentMaterial.forEach(item => item?.dispose?.());
+      } else {
+        currentMaterial?.dispose?.();
+      }
+    });
+    this.materialOverrides.clear();
   }
 
   _emitChange(source = "external") {

@@ -12,6 +12,7 @@ import {
   updateHandoverModel,
   uploadHandoverModel
 } from "@/api/handoverModels";
+import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
 
 defineOptions({
   name: "HandoverModels"
@@ -31,7 +32,7 @@ function readRecords(data) {
 }
 
 function normalizeModelItem(item) {
-  return {
+  return normalizeHandoverModelRecord({
     id: item?.id || "",
     name: item?.name || "未命名模型",
     lod: item?.lod || "LOD300",
@@ -40,7 +41,7 @@ function normalizeModelItem(item) {
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
     url: item?.url || ""
-  };
+  });
 }
 
 async function loadModels(showSuccess = false) {

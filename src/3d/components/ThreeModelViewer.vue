@@ -560,7 +560,8 @@ let onFirstPersonKeyUp;
 let onFirstPersonMouseMove;
 let onPointerLockChange;
 
-let selectionBoxHelper = null;
+let selectionHighlightTarget = null;
+let selectionHighlightOriginalMaterial = null;
 const meshOpacityOverrides = new Map();
 const visibilityOverrides = new Map();
 const isFirstPerson = ref(false);
@@ -1536,12 +1537,45 @@ function findObjectByUUID(uuid) {
   return found;
 }
 
+function cloneMaterialSafe(material) {
+  if (!material) return material;
+  if (Array.isArray(material)) {
+    return material.map(item => item?.clone?.() || item);
+  }
+  return material?.clone?.() || material;
+}
+
+function disposeClonedMaterialSafe(material) {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    material.forEach(item => item?.dispose?.());
+    return;
+  }
+  material?.dispose?.();
+}
+
+function applyHighlightTint(material, color = 0xff7a1a) {
+  if (!material) return;
+  if (material.emissive) {
+    material.emissive.setHex(color);
+    material.emissiveIntensity = Math.max(
+      0.8,
+      Number(material.emissiveIntensity) || 0
+    );
+  } else if (material.color) {
+    material.color.lerp(new THREE.Color(color), 0.35);
+  }
+  material.needsUpdate = true;
+}
+
 function clearBoxSelection() {
-  if (!selectionBoxHelper || !scene) return;
-  scene.remove(selectionBoxHelper);
-  selectionBoxHelper.geometry?.dispose?.();
-  selectionBoxHelper.material?.dispose?.();
-  selectionBoxHelper = null;
+  if (!selectionHighlightTarget) return;
+  selectionHighlightOriginalMaterial?.forEach((originalMaterial, mesh) => {
+    disposeClonedMaterialSafe(mesh.material);
+    mesh.material = originalMaterial;
+  });
+  selectionHighlightTarget = null;
+  selectionHighlightOriginalMaterial = null;
 }
 
 function highlightByUUID(uuid) {
@@ -1550,10 +1584,25 @@ function highlightByUUID(uuid) {
   if (!obj) return false;
 
   clearBoxSelection();
-  selectionBoxHelper = new THREE.BoxHelper(obj, 0xff6600);
-  selectionBoxHelper.userData.isHelper = true;
-  selectionBoxHelper.renderOrder = 998;
-  scene.add(selectionBoxHelper);
+  selectionHighlightTarget = obj;
+  selectionHighlightOriginalMaterial = new Map();
+  obj.traverse(target => {
+    if (
+      !target?.isMesh ||
+      target.userData?.isHelper ||
+      target.userData?.isMeasure
+    ) {
+      return;
+    }
+    selectionHighlightOriginalMaterial.set(target, target.material);
+    target.material = cloneMaterialSafe(target.material);
+    const materials = Array.isArray(target.material)
+      ? target.material
+      : [target.material];
+    materials.filter(Boolean).forEach(material => {
+      applyHighlightTint(material);
+    });
+  });
   return true;
 }
 
@@ -1964,7 +2013,6 @@ function startLoop() {
     updateFirstPersonMovement(frameMs);
     clippingTool?.updateAnimation?.(frameMs / 1000);
     controls?.update?.();
-    selectionBoxHelper?.update?.();
     renderer.render(scene, camera);
 
     // 更新测量标注
@@ -2010,6 +2058,14 @@ async function loadModel() {
 
     for (let index = 0; index < sceneModels.length; index += 1) {
       const item = sceneModels[index];
+      console.log("[ThreeModelViewer] load model", {
+        index,
+        totalCount,
+        instanceId: item.instanceId,
+        modelId: item.modelId || "",
+        modelName: item.modelName || "",
+        modelUrl: item.modelUrl
+      });
       const { object, type, stats } = await loadModelToGroup({
         url: item.modelUrl,
         name: item.modelName,
@@ -2042,6 +2098,7 @@ async function loadModel() {
       instanceGroup.userData.sceneModelInstanceId = item.instanceId;
       instanceGroup.userData.sceneModelId = item.modelId || "";
       instanceGroup.userData.sceneModelName = item.modelName || "";
+      instanceGroup.userData.sceneModelType = type || "";
       instanceGroup.position.fromArray(item.transform.position || [0, 0, 0]);
       instanceGroup.rotation.set(...(item.transform.rotation || [0, 0, 0]));
       instanceGroup.scale.fromArray(item.transform.scale || [1, 1, 1]);
@@ -2051,6 +2108,7 @@ async function loadModel() {
         child.userData.sceneModelInstanceId = item.instanceId;
         child.userData.sceneModelId = item.modelId || "";
         child.userData.sceneModelName = item.modelName || "";
+        child.userData.sceneModelType = type || "";
       });
 
       instanceGroup.add(object);
@@ -2102,6 +2160,14 @@ async function loadModel() {
       clippingTool.setBounds(lastBounds.box);
     }
 
+    console.log("[ThreeModelViewer] scene debug", {
+      scene,
+      modelGroup,
+      loadedModels,
+      modelType,
+      modelStats: modelStats.value
+    });
+
     emit("loaded", {
       url: loadedModels[0]?.modelUrl || "",
       type: sceneModels.length > 1 ? "multi" : modelType,
@@ -2111,6 +2177,15 @@ async function loadModel() {
   } catch (e) {
     if (requestId !== loadRequestId) return;
     const msg = e?.message || String(e);
+    console.error("[ThreeModelViewer] load model failed", {
+      models: sceneModels.map(item => ({
+        instanceId: item.instanceId,
+        modelId: item.modelId || "",
+        modelName: item.modelName || "",
+        modelUrl: item.modelUrl
+      })),
+      error: e
+    });
     errorText.value = msg;
     emit("error", e);
   } finally {

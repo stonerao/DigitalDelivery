@@ -87,7 +87,7 @@ defineExpose({
     <div class="space-y-3 pr-1">
       <div class="rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 flex items-center justify-between gap-2">
-          <div class="text-sm font-semibold">三级导航</div>
+          <div class="text-sm font-semibold">导航</div>
           <el-button size="small" @click="emit('create-root-node')">
             新增节点
           </el-button>

@@ -4,7 +4,10 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
 import { IFCLoader } from "web-ifc-three/IFCLoader.js";
-import { applyModelRequestHeaders } from "./requestHeaders";
+import {
+  applyModelRequestHeaders,
+  getModelRequestHeaders
+} from "./requestHeaders";
 
 function getExt(source = "") {
   const clean = String(source || "")
@@ -97,7 +100,10 @@ export async function loadModelToGroup({
   // GLTF / GLB
   if (type === "gltf" || type === "glb") {
     const loader = new GLTFLoader();
-    applyModelRequestHeaders(loader, url);
+    const requestHeaders = getModelRequestHeaders(url);
+    if (type === "gltf") {
+      applyModelRequestHeaders(loader, url);
+    }
 
     // Draco 解码器（用于 draco 压缩的 glb/gltf）
     // decoder 地址基于 BASE_URL，兼容子路径部署
@@ -116,15 +122,48 @@ export async function loadModelToGroup({
       return `${targetUrl}${sep}_=${Date.now()}`;
     };
 
+    const resourcePath = (() => {
+      try {
+        return new URL(".", url).href;
+      } catch {
+        const slashIndex = String(url).lastIndexOf("/");
+        return slashIndex >= 0 ? String(url).slice(0, slashIndex + 1) : "";
+      }
+    })();
+
+    const loadGlbByFetch = async targetUrl => {
+      const response = await fetch(targetUrl, {
+        method: "GET",
+        headers: requestHeaders,
+        credentials: Object.keys(requestHeaders).length
+          ? "same-origin"
+          : "same-origin"
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      const data = await response.arrayBuffer();
+      if (onProgress) {
+        const total = Number(response.headers.get("content-length") || 0);
+        onProgress(data.byteLength, total || data.byteLength);
+      }
+      return new Promise((resolve, reject) => {
+        loader.parse(data, resourcePath, resolve, reject);
+      });
+    };
+
     let gltf;
     try {
       try {
-        gltf = await loadOnce(url);
+        gltf = type === "glb" ? await loadGlbByFetch(url) : await loadOnce(url);
       } catch (err) {
         const msg = err?.message || String(err);
         // 部分环境下 304 会被 three.js 当作失败
         if (msg.includes("304") || msg.toLowerCase().includes("not modified")) {
-          gltf = await loadOnce(withCacheBust(url));
+          gltf =
+            type === "glb"
+              ? await loadGlbByFetch(withCacheBust(url))
+              : await loadOnce(withCacheBust(url));
         } else {
           throw err;
         }
@@ -134,6 +173,11 @@ export async function loadModelToGroup({
       group.add(gltf.scene);
       const stats = computeModelStats(group);
       return { object: group, type, stats };
+    } catch (error) {
+      throw new Error(
+        `模型加载失败（${type.toUpperCase()}）：${url}。${error?.message || error}`,
+        { cause: error }
+      );
     } finally {
       // 避免 worker 泄漏
       dracoLoader.dispose();
@@ -164,9 +208,17 @@ export async function loadModelToGroup({
       objLoader.setMaterials(materials);
     }
 
-    const obj = await new Promise((resolve, reject) => {
-      objLoader.load(url, resolve, progressHandler, reject);
-    });
+    let obj;
+    try {
+      obj = await new Promise((resolve, reject) => {
+        objLoader.load(url, resolve, progressHandler, reject);
+      });
+    } catch (error) {
+      throw new Error(
+        `模型加载失败（OBJ）：${url}。${error?.message || error}`,
+        { cause: error }
+      );
+    }
 
     const group = new THREE.Group();
     group.add(obj);
@@ -194,9 +246,17 @@ export async function loadModelToGroup({
     applyModelRequestHeaders(loader, url);
     loader.ifcManager.setWasmPath(ifcWasmPath);
 
-    const mesh = await new Promise((resolve, reject) => {
-      loader.load(url, resolve, progressHandler, reject);
-    });
+    let mesh;
+    try {
+      mesh = await new Promise((resolve, reject) => {
+        loader.load(url, resolve, progressHandler, reject);
+      });
+    } catch (error) {
+      throw new Error(
+        `模型加载失败（IFC）：${url}。${error?.message || error}`,
+        { cause: error }
+      );
+    }
 
     const group = new THREE.Group();
     group.add(mesh);

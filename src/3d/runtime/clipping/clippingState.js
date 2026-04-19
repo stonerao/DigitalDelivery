@@ -5,6 +5,11 @@ export const CLIPPING_MODE_OPTIONS = [
   { label: "盒状剖切", value: "box" }
 ];
 
+export const CLIPPING_TARGET_OPTIONS = [
+  { label: "整体场景", value: "scene" },
+  { label: "当前选中物体", value: "object" }
+];
+
 export const CLIPPING_AXIS_OPTIONS = [
   { label: "X 轴", value: "x" },
   { label: "Y 轴", value: "y" },
@@ -62,6 +67,9 @@ export function createDefaultClippingState() {
   return {
     enabled: false,
     mode: "single-plane",
+    targetMode: "scene",
+    targetObjectUuid: "",
+    targetObjectName: "",
     helpersVisible: true,
     capEnabled: false,
     feedbackMode: "highlight-affected",
@@ -98,6 +106,9 @@ export function normalizeClippingState(input = {}) {
       input.mode === "box" || input.mode === "single-plane"
         ? input.mode
         : fallback.mode,
+    targetMode: input.targetMode === "object" ? "object" : "scene",
+    targetObjectUuid: String(input.targetObjectUuid || ""),
+    targetObjectName: String(input.targetObjectName || ""),
     helpersVisible:
       input.helpersVisible === undefined
         ? fallback.helpersVisible
@@ -191,6 +202,9 @@ export function resetClippingState(state) {
   const current = normalizeClippingState(state);
   return {
     ...createDefaultClippingState(),
+    targetMode: current.targetMode,
+    targetObjectUuid: current.targetObjectUuid,
+    targetObjectName: current.targetObjectName,
     helpersVisible: current.helpersVisible,
     capEnabled: current.capEnabled,
     feedbackMode: current.feedbackMode
@@ -231,15 +245,21 @@ export function ensureVisibleClippingState(state) {
 export function getActiveClippingSummary(state) {
   const normalized = normalizeClippingState(state);
   if (!normalized.enabled) return "未启用";
+  const targetText =
+    normalized.targetMode === "object"
+      ? normalized.targetObjectName || "当前物体"
+      : "整体场景";
   if (normalized.mode === "single-plane") {
     const axisText = normalized.singlePlane.axis.toUpperCase();
     const directionText =
       normalized.singlePlane.direction === "negative" ? "负向" : "正向";
-    return `${axisText} 轴单平面 / ${directionText}`;
+    return `${axisText} 轴单平面 / ${directionText} / ${targetText}`;
   }
 
   const axes = CLIPPING_AXES.filter(axis => normalized.box[axis].enabled).map(
     axis => axis.toUpperCase()
   );
-  return axes.length ? `盒状剖切 / ${axes.join("/")}` : "盒状剖切";
+  return axes.length
+    ? `盒状剖切 / ${axes.join("/")} / ${targetText}`
+    : `盒状剖切 / ${targetText}`;
 }

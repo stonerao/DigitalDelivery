@@ -84,14 +84,20 @@ export async function onObjectSelect({
   runtimeStore?.setSelectedObject?.(info);
   setSelectedDeviceUuid?.(info?.uuid || "");
 
-  const device = sceneDevices.find(item => item.uuid === info?.uuid);
+  const device = sceneDevices.find(item => {
+    if (!item) return false;
+    if (item.uuid === info?.uuid) return true;
+    const meshUuids = Array.isArray(item.meshUuids) ? item.meshUuids : [];
+    return meshUuids.includes(info?.uuid);
+  });
   syncNavigationSelections?.(device);
   setShowObjectPanel?.(true);
   syncMeasurementPoints?.();
 
-  if (interactionMode === "pick" && info?.uuid) {
+  const targetUuid = info?.objectUuid || info?.uuid || "";
+  if (interactionMode === "pick" && targetUuid) {
     if (treeFilterTextRef?.value) clearTreeFilterText?.();
-    await selectTreeNodeByUUID?.(info.uuid, { openPanel: false });
+    await selectTreeNodeByUUID?.(targetUuid, { openPanel: false });
   }
 }
 

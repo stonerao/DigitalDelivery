@@ -7,7 +7,6 @@ import {
   shallowRef,
   watch
 } from "vue";
-import localWasmUrl from "@cadview/dwg/dist/libredwg.wasm?url";
 
 defineOptions({ name: "CadViewer" });
 
@@ -26,6 +25,7 @@ const viewerRef = shallowRef(null);
 
 let runtimePromise = null;
 let loadToken = 0;
+const localWasmUrl = `${import.meta.env.BASE_URL}libredwg.wasm`;
 
 const canOperate = computed(() => {
   return Boolean(viewerRef.value) && !loading.value;

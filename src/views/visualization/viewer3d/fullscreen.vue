@@ -10,6 +10,7 @@ import {
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
+import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
 import { getConfig } from "@/config";
 import { ThreeModelViewer } from "@/3d";
 import { getHandoverKksList } from "@/api/handoverData";
@@ -50,6 +51,7 @@ import {
   CLIPPING_FEEDBACK_OPTIONS,
   CLIPPING_MODE_OPTIONS,
   CLIPPING_PRESET_OPTIONS,
+  CLIPPING_TARGET_OPTIONS,
   cloneClippingState,
   createDefaultClippingState,
   ensureVisibleClippingState,
@@ -348,7 +350,7 @@ const modelName = computed(() => {
 });
 
 function normalizeModelItem(item) {
-  return {
+  return normalizeHandoverModelRecord({
     id: item?.id || "",
     name: item?.name || "未命名模型",
     lod: item?.lod || "LOD300",
@@ -357,7 +359,7 @@ function normalizeModelItem(item) {
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
     url: item?.url || ""
-  };
+  });
 }
 
 function mapSystemTreeNodes(nodes = [], parentId = "") {
@@ -894,8 +896,7 @@ const viewerSceneModels = computed(() =>
 
 function openModelPicker() {
   modelPickerSelection.value = [];
-  modelPickerNodeId.value =
-    selectedSystemNodeId.value || systemNodeSelectOptions.value[0]?.value || "";
+  modelPickerNodeId.value = selectedSystemNodeId.value || "";
   modelPickerVisible.value = true;
 }
 
@@ -905,11 +906,6 @@ async function confirmAddModels() {
     message("请先选择模型", { type: "warning" });
     return;
   }
-  if (!modelPickerNodeId.value) {
-    message("请选择模型挂载的系统节点", { type: "warning" });
-    return;
-  }
-
   const existingIds = new Set(sceneModels.value.map(item => item.modelId));
   const appendIds = ids.filter(id => !existingIds.has(id));
   if (!appendIds.length) {
@@ -924,7 +920,7 @@ async function confirmAddModels() {
   details.forEach(detail => {
     sceneModels.value.push(
       createSceneModel(detail, {
-        systemNodeId: modelPickerNodeId.value,
+        systemNodeId: modelPickerNodeId.value || "",
         systemNodeLabel: selectedNodeLabel
       })
     );
@@ -1040,6 +1036,7 @@ const clippingAxisOptions = CLIPPING_AXIS_OPTIONS;
 const clippingDirectionOptions = CLIPPING_DIRECTION_OPTIONS;
 const clippingFeedbackOptions = CLIPPING_FEEDBACK_OPTIONS;
 const clippingPresetOptions = CLIPPING_PRESET_OPTIONS;
+const clippingTargetOptions = CLIPPING_TARGET_OPTIONS;
 const clippingSummaryText = computed(() =>
   getActiveClippingSummary(runtimeClippingState.value)
 );
@@ -1528,7 +1525,48 @@ const navigationTreeData = computed(() => {
       .filter(Boolean);
   };
 
-  return buildNodes(systemNodeTree.value);
+  const mountedTree = buildNodes(systemNodeTree.value);
+  const unmountedModels = sceneModels.value
+    .filter(item => !String(item.systemNodeId || "").trim())
+    .map(item => {
+      const devices = sceneDevices.value
+        .filter(device => device.instanceId === item.instanceId)
+        .map(device => ({
+          id: `nav-device:${device.uuid}`,
+          label: device.kks ? `${device.name}（${device.kks}）` : device.name,
+          kind: "device",
+          uuid: device.uuid,
+          nodeId: device.nodeId,
+          kks: device.kks,
+          raw: device
+        }));
+
+      return {
+        id: `nav-model:${item.instanceId}`,
+        label: `${item.modelName || "未命名模型"}${devices.length ? `（${devices.length}）` : ""}`,
+        kind: "model",
+        instanceId: item.instanceId,
+        deviceCount: devices.length,
+        children: devices
+      };
+    });
+
+  if (unmountedModels.length > 0) {
+    mountedTree.push({
+      id: "nav-unmounted-models",
+      label: "未挂载模型",
+      kind: "group",
+      nodeId: "",
+      parentId: "",
+      deviceCount: unmountedModels.reduce(
+        (sum, item) => sum + Number(item.deviceCount || 0),
+        0
+      ),
+      children: unmountedModels
+    });
+  }
+
+  return mountedTree;
 });
 
 const layerTreeData = computed(() => {
@@ -1775,15 +1813,19 @@ function buildProjectInfoPayload() {
       pointMarkersVisible: pointMarkersVisible.value,
       anchorMarkersVisible: anchorMarkersVisible.value,
       cameraMarkersVisible: cameraMarkersVisible.value,
-      selectedObjectRef: selectedObjectInfo.value?.uuid
-        ? {
-            instanceId:
-              selectedObjectInfo.value?.userData?.sceneModelInstanceId ||
-              activeSceneModel.value?.instanceId ||
-              "",
-            objectUuid: selectedObjectInfo.value.uuid
-          }
-        : null,
+      selectedObjectRef:
+        selectedObjectInfo.value?.objectUuid || selectedObjectInfo.value?.uuid
+          ? {
+              instanceId:
+                selectedObjectInfo.value?.userData?.sceneModelInstanceId ||
+                activeSceneModel.value?.instanceId ||
+                "",
+              objectUuid:
+                selectedObjectInfo.value?.objectUuid ||
+                selectedObjectInfo.value?.uuid ||
+                ""
+            }
+          : null,
       selectedDeviceUuid: selectedDeviceUuid.value,
       selectedAnchorId: selectedAnchorId.value,
       selectedCameraId: selectedCameraId.value,
@@ -2553,6 +2595,11 @@ function getDevicesByRegion(regionId) {
   );
 }
 
+function getDevicesByModelInstance(instanceId) {
+  if (!instanceId) return [];
+  return sceneDevices.value.filter(item => item.instanceId === instanceId);
+}
+
 function syncLayerTreeSelection(keys = allLayerLeafKeys.value) {
   syncSceneLayerTreeSelection({
     keys,
@@ -2914,6 +2961,38 @@ async function locateRegion(regionId, withMessage = true) {
   });
 }
 
+async function locateModelInstance(instanceId, withMessage = true) {
+  const devices = getDevicesByModelInstance(instanceId);
+  if (!devices.length) {
+    if (withMessage) {
+      message("当前模型暂无可定位构件", { type: "warning" });
+    }
+    return false;
+  }
+
+  selectedDeviceUuid.value = devices[0].uuid;
+  syncNavigationSelections(devices[0]);
+  viewerAdapter.highlightObjectByUUID(devices[0].uuid);
+  viewerAdapter.focusObjectsByUUIDs(
+    devices.flatMap(item =>
+      Array.isArray(item.meshUuids) && item.meshUuids.length
+        ? item.meshUuids.filter(Boolean)
+        : item.uuid
+          ? [item.uuid]
+          : []
+    )
+  );
+  await selectTreeNodeByUUID(devices[0].uuid, { openPanel: false });
+
+  if (withMessage) {
+    const modelLabel =
+      sceneModels.value.find(item => item.instanceId === instanceId)
+        ?.modelName || "当前模型";
+    message(`已定位到模型：${modelLabel}`, { type: "success" });
+  }
+  return true;
+}
+
 async function locateByKks(kks = selectedQuickKks.value) {
   await locateSceneByKks({
     kks,
@@ -2945,6 +3024,11 @@ async function isolateDevice(
 }
 
 async function handleNavigationNodeClick(node) {
+  if (node?.kind === "model") {
+    currentNavNodeKey.value = node.id;
+    await locateModelInstance(node.instanceId);
+    return;
+  }
   await handleSceneNavigationNodeClick({
     node,
     setCurrentNavNodeKey: value => {
@@ -3491,6 +3575,18 @@ async function onObjectSelect(info) {
     },
     selectTreeNodeByUUID
   });
+  const clippingTargetUuid = info?.objectUuid || info?.uuid || "";
+  if (
+    clippingTargetUuid &&
+    runtimeClippingState.value.targetMode === "object"
+  ) {
+    updateClippingState({
+      ...runtimeClippingState.value,
+      targetMode: "object",
+      targetObjectUuid: clippingTargetUuid,
+      targetObjectName: info.name || ""
+    });
+  }
 }
 
 function closeObjectPanel() {
@@ -4024,12 +4120,13 @@ onBeforeUnmount(() => {
           destroy-on-close
         >
           <el-form label-width="108px">
-            <el-form-item label="挂载系统节点">
+            <el-form-item label="挂载节点">
               <el-select
                 v-model="modelPickerNodeId"
                 filterable
+                clearable
                 class="w-full"
-                placeholder="请选择模型挂载的导航节点"
+                placeholder="可选，选择模型挂载节点"
               >
                 <el-option
                   v-for="item in systemNodeSelectOptions"
@@ -4099,6 +4196,8 @@ onBeforeUnmount(() => {
           :clipping-state="runtimeClippingState"
           :clipping-summary="clippingSummaryText"
           :clipping-stats="clippingStats"
+          :target-options="clippingTargetOptions"
+          :selected-object-info="selectedObjectInfo"
           :animation-playing="clippingAnimationPlaying"
           :animation-speed="clippingAnimationSpeed"
           :animation-mode="clippingAnimationMode"

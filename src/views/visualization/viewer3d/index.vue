@@ -16,6 +16,7 @@ import {
   getHandoverProjectDetail,
   updateHandoverProject
 } from "@/api/handoverProjects";
+import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
 import ViewerBottomToolbar from "./toolbars/ViewerBottomToolbar.vue";
 import StructurePanel from "./panels/StructurePanel.vue";
 import { buildTreeNodeIndex } from "./services/sceneTreeService";
@@ -56,7 +57,7 @@ function readRecords(data) {
 }
 
 function normalizeModelItem(item) {
-  return {
+  return normalizeHandoverModelRecord({
     id: item?.id || "",
     name: item?.name || "未命名模型",
     lod: item?.lod || "LOD300",
@@ -65,7 +66,7 @@ function normalizeModelItem(item) {
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
     url: item?.url || ""
-  };
+  });
 }
 
 function createSceneModel(detail, partial = {}) {
@@ -279,13 +280,17 @@ function buildProjectInfoPayload() {
       showStats: showStats.value,
       activeSideTab: activeRightTab.value,
       pointMarkersVisible: pointMarkersVisible.value,
-      selectedObjectRef: selectedObjectInfo.value?.uuid
-        ? {
-            instanceId:
-              selectedObjectInfo.value?.userData?.sceneModelInstanceId || "",
-            objectUuid: selectedObjectInfo.value.uuid
-          }
-        : null,
+      selectedObjectRef:
+        selectedObjectInfo.value?.objectUuid || selectedObjectInfo.value?.uuid
+          ? {
+              instanceId:
+                selectedObjectInfo.value?.userData?.sceneModelInstanceId || "",
+              objectUuid:
+                selectedObjectInfo.value?.objectUuid ||
+                selectedObjectInfo.value?.uuid ||
+                ""
+            }
+          : null,
       selectedDeviceUuid: selectedDeviceUuid.value,
       selectedSystemNodeId: selectedSystemNodeId.value,
       selectedQuickKks: selectedQuickKks.value,

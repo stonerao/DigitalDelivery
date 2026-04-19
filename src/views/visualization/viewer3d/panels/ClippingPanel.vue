@@ -24,6 +24,14 @@ const props = defineProps({
     type: Object,
     default: () => ({})
   },
+  targetOptions: {
+    type: Array,
+    default: () => []
+  },
+  selectedObjectInfo: {
+    type: Object,
+    default: null
+  },
   modeOptions: {
     type: Array,
     default: () => []
@@ -130,6 +138,23 @@ function onPresetChange(value) {
   if (!value) return;
   emit("apply-preset", value);
 }
+
+function onTargetModeChange(value) {
+  const isObject = value === "object";
+  patchState({
+    targetMode: isObject ? "object" : "scene",
+    targetObjectUuid: isObject
+      ? props.selectedObjectInfo?.uuid ||
+        props.clippingState?.targetObjectUuid ||
+        ""
+      : "",
+    targetObjectName: isObject
+      ? props.selectedObjectInfo?.name ||
+        props.clippingState?.targetObjectName ||
+        ""
+      : ""
+  });
+}
 </script>
 
 <template>
@@ -160,6 +185,29 @@ function onPresetChange(value) {
           size="small"
           @change="patchState({ mode: $event })"
         />
+      </div>
+
+      <div class="dd-clipping-row">
+        <span class="dd-label">剖切对象</span>
+        <el-segmented
+          :model-value="clippingState.targetMode || 'scene'"
+          :options="targetOptions"
+          size="small"
+          @change="onTargetModeChange"
+        />
+      </div>
+
+      <div
+        v-if="(clippingState.targetMode || 'scene') === 'object'"
+        class="dd-clipping-target-tip"
+      >
+        {{
+          clippingState.targetObjectName
+            ? `当前对象：${clippingState.targetObjectName}`
+            : selectedObjectInfo?.name
+              ? `当前对象：${selectedObjectInfo.name}`
+              : "请先在场景中选中一个物体，再进行单物体剖切"
+        }}
       </div>
 
       <div class="dd-clipping-stats">
@@ -469,6 +517,12 @@ function onPresetChange(value) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.dd-clipping-target-tip {
+  margin-top: -6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .dd-clipping-row {

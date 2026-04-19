@@ -21,6 +21,8 @@ export class ObjectPicker {
     this.selectedObject = null;
     this.hoverHelper = null;
     this.selectHelper = null;
+    this.hoverOriginalMaterial = null;
+    this.selectOriginalMaterial = null;
     this.pickTargets = [];
     this.pickTargetsDirty = true;
     this.intersections = [];
@@ -150,9 +152,13 @@ export class ObjectPicker {
    */
   getSelectedProperties() {
     if (!this.selectedObject) return null;
+    const meshes = this._collectSelectionMeshes(this.selectedObject);
+    const representativeMesh = meshes[0] || this.selectedObject;
     return {
-      name: this.selectedObject.name || "未命名",
-      uuid: this.selectedObject.uuid,
+      name: this.selectedObject.name || representativeMesh.name || "未命名",
+      uuid: representativeMesh.uuid || this.selectedObject.uuid,
+      objectUuid: this.selectedObject.uuid,
+      meshUuids: meshes.map(item => item.uuid),
       type: this.selectedObject.type,
       userData: this.selectedObject.userData,
       geometry: this.selectedObject.geometry
@@ -212,7 +218,7 @@ export class ObjectPicker {
   selectByUUID(uuid) {
     let found = null;
     this.scene.traverse(obj => {
-      if (obj.uuid === uuid && obj.isMesh) {
+      if (obj.uuid === uuid) {
         found = obj;
       }
     });
@@ -333,6 +339,13 @@ export class ObjectPicker {
     this.clearSelection();
 
     if (hit) {
+      const resolvedTarget = this._resolveSelectionTarget(hit.object);
+      console.log("[ObjectPicker] pick debug", {
+        hitObject: hit.object,
+        resolvedTarget,
+        scene: this.scene,
+        parentChain: this._buildParentChain(hit.object)
+      });
       this._selectObject(hit.object);
 
       if (this.onSelect) {
@@ -346,8 +359,9 @@ export class ObjectPicker {
   }
 
   _selectObject(obj) {
-    this.selectedObject = obj;
-    this._applySelectHelper(obj);
+    const target = this._resolveSelectionTarget(obj);
+    this.selectedObject = target;
+    this._applySelectHelper(target);
   }
 
   _markContainerRectDirty() {
@@ -367,37 +381,136 @@ export class ObjectPicker {
   }
 
   _applyHoverHelper(obj) {
-    if (!obj) return;
+    const target = this._resolveSelectionTarget(obj);
+    if (!target) return;
     this._removeHoverHelper();
-    this.hoverHelper = new THREE.BoxHelper(obj, 0x00ffff);
-    this.hoverHelper.userData.isHelper = true;
-    this.hoverHelper.renderOrder = 998;
-    this.scene.add(this.hoverHelper);
+    this.hoverHelper = target;
+    this.hoverOriginalMaterial = new Map();
+    this._collectSelectionMeshes(target).forEach(mesh => {
+      this.hoverOriginalMaterial.set(mesh, mesh.material);
+      mesh.material = this._cloneMaterialSafe(mesh.material);
+      const materials = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      materials.filter(Boolean).forEach(material => {
+        this._applyTint(material, 0x00c2ff, 0.22, 0.45);
+      });
+    });
   }
 
   _applySelectHelper(obj) {
     if (!obj) return;
     this._removeSelectHelper();
-    this.selectHelper = new THREE.BoxHelper(obj, 0xff6600);
-    this.selectHelper.userData.isHelper = true;
-    this.selectHelper.renderOrder = 999;
-    this.scene.add(this.selectHelper);
+    this.selectHelper = obj;
+    this.selectOriginalMaterial = new Map();
+    this._collectSelectionMeshes(obj).forEach(mesh => {
+      this.selectOriginalMaterial.set(mesh, mesh.material);
+      mesh.material = this._cloneMaterialSafe(mesh.material);
+      const materials = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      materials.filter(Boolean).forEach(material => {
+        this._applyTint(material, 0xff7a1a, 0.35, 0.9);
+      });
+    });
   }
 
   _removeHoverHelper() {
     if (!this.hoverHelper) return;
-    this.scene.remove(this.hoverHelper);
-    this.hoverHelper.geometry?.dispose?.();
-    this.hoverHelper.material?.dispose?.();
+    this.hoverOriginalMaterial?.forEach((originalMaterial, mesh) => {
+      this._disposeClonedMaterialSafe(mesh.material);
+      mesh.material = originalMaterial;
+    });
     this.hoverHelper = null;
+    this.hoverOriginalMaterial = null;
   }
 
   _removeSelectHelper() {
     if (!this.selectHelper) return;
-    this.scene.remove(this.selectHelper);
-    this.selectHelper.geometry?.dispose?.();
-    this.selectHelper.material?.dispose?.();
+    this.selectOriginalMaterial?.forEach((originalMaterial, mesh) => {
+      this._disposeClonedMaterialSafe(mesh.material);
+      mesh.material = originalMaterial;
+    });
     this.selectHelper = null;
+    this.selectOriginalMaterial = null;
+  }
+
+  _cloneMaterialSafe(material) {
+    if (!material) return material;
+    if (Array.isArray(material)) {
+      return material.map(item => item?.clone?.() || item);
+    }
+    return material?.clone?.() || material;
+  }
+
+  _disposeClonedMaterialSafe(material) {
+    if (!material) return;
+    if (Array.isArray(material)) {
+      material.forEach(item => item?.dispose?.());
+      return;
+    }
+    material?.dispose?.();
+  }
+
+  _applyTint(material, color, lerpAmount = 0.3, emissiveIntensity = 0.8) {
+    if (!material) return;
+    if (material.emissive) {
+      material.emissive.setHex(color);
+      material.emissiveIntensity = Math.max(
+        emissiveIntensity,
+        Number(material.emissiveIntensity) || 0
+      );
+    } else if (material.color) {
+      material.color.lerp(new THREE.Color(color), lerpAmount);
+    }
+    material.needsUpdate = true;
+  }
+
+  _collectSelectionMeshes(target) {
+    const meshes = [];
+    if (!target?.traverse) {
+      return target?.isMesh ? [target] : meshes;
+    }
+    target.traverse(obj => {
+      if (obj?.isMesh && !obj.userData?.isHelper && !obj.userData?.isMeasure) {
+        meshes.push(obj);
+      }
+    });
+    return meshes;
+  }
+
+  _resolveSelectionTarget(obj) {
+    if (!obj) return null;
+    const modelType = String(obj.userData?.sceneModelType || "").toLowerCase();
+    const objectName = String(obj.name || "").trim();
+    const parent = obj.parent;
+
+    if (
+      modelType === "glb" &&
+      obj.isMesh &&
+      objectName.includes("(网格)") &&
+      parent?.type === "Group"
+    ) {
+      return parent;
+    }
+
+    return obj;
+  }
+
+  _buildParentChain(obj) {
+    const chain = [];
+    let current = obj;
+    while (current) {
+      chain.push({
+        name: current.name || "",
+        uuid: current.uuid || "",
+        type: current.type || "",
+        isMesh: Boolean(current.isMesh),
+        sceneModelType: current.userData?.sceneModelType || ""
+      });
+      current = current.parent;
+    }
+    return chain;
   }
 
   _getBoundingBox(obj) {
