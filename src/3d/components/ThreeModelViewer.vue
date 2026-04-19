@@ -560,8 +560,6 @@ let onFirstPersonKeyUp;
 let onFirstPersonMouseMove;
 let onPointerLockChange;
 
-let selectionHighlightTarget = null;
-let selectionHighlightOriginalMaterial = null;
 const meshOpacityOverrides = new Map();
 const visibilityOverrides = new Map();
 const isFirstPerson = ref(false);
@@ -1537,73 +1535,12 @@ function findObjectByUUID(uuid) {
   return found;
 }
 
-function cloneMaterialSafe(material) {
-  if (!material) return material;
-  if (Array.isArray(material)) {
-    return material.map(item => item?.clone?.() || item);
-  }
-  return material?.clone?.() || material;
-}
-
-function disposeClonedMaterialSafe(material) {
-  if (!material) return;
-  if (Array.isArray(material)) {
-    material.forEach(item => item?.dispose?.());
-    return;
-  }
-  material?.dispose?.();
-}
-
-function applyHighlightTint(material, color = 0xff7a1a) {
-  if (!material) return;
-  if (material.emissive) {
-    material.emissive.setHex(color);
-    material.emissiveIntensity = Math.max(
-      0.8,
-      Number(material.emissiveIntensity) || 0
-    );
-  } else if (material.color) {
-    material.color.lerp(new THREE.Color(color), 0.35);
-  }
-  material.needsUpdate = true;
+function highlightByUUID(uuid) {
+  return selectByUUID(uuid);
 }
 
 function clearBoxSelection() {
-  if (!selectionHighlightTarget) return;
-  selectionHighlightOriginalMaterial?.forEach((originalMaterial, mesh) => {
-    disposeClonedMaterialSafe(mesh.material);
-    mesh.material = originalMaterial;
-  });
-  selectionHighlightTarget = null;
-  selectionHighlightOriginalMaterial = null;
-}
-
-function highlightByUUID(uuid) {
-  if (!scene) return false;
-  const obj = findObjectByUUID(uuid);
-  if (!obj) return false;
-
-  clearBoxSelection();
-  selectionHighlightTarget = obj;
-  selectionHighlightOriginalMaterial = new Map();
-  obj.traverse(target => {
-    if (
-      !target?.isMesh ||
-      target.userData?.isHelper ||
-      target.userData?.isMeasure
-    ) {
-      return;
-    }
-    selectionHighlightOriginalMaterial.set(target, target.material);
-    target.material = cloneMaterialSafe(target.material);
-    const materials = Array.isArray(target.material)
-      ? target.material
-      : [target.material];
-    materials.filter(Boolean).forEach(material => {
-      applyHighlightTint(material);
-    });
-  });
-  return true;
+  clearSelection();
 }
 
 function focusByUUID(uuid) {
@@ -2160,14 +2097,6 @@ async function loadModel() {
       clippingTool.setBounds(lastBounds.box);
     }
 
-    console.log("[ThreeModelViewer] scene debug", {
-      scene,
-      modelGroup,
-      loadedModels,
-      modelType,
-      modelStats: modelStats.value
-    });
-
     emit("loaded", {
       url: loadedModels[0]?.modelUrl || "",
       type: sceneModels.length > 1 ? "multi" : modelType,
@@ -2470,12 +2399,15 @@ function getSelectedObject() {
   return objectPicker?.getSelectedProperties();
 }
 
-function selectByUUID(uuid) {
+function selectByUUID(uuid, options = {}) {
   if (!uuid || !objectPicker) return false;
+  const { emitEvent = true } = options || {};
   const obj = objectPicker.selectByUUID(uuid);
   const props = objectPicker.getSelectedProperties();
-  if (obj && props) {
+  if (obj && props && emitEvent) {
     emit("object-select", props);
+  }
+  if (obj && props) {
     return true;
   }
   return false;

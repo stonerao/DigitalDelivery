@@ -101,8 +101,7 @@ export async function locateDevice({
 }) {
   if (!item?.uuid) return false;
 
-  viewerAdapter.selectObjectByUUID(item.uuid);
-  viewerAdapter.highlightObjectByUUID(item.uuid);
+  viewerAdapter.selectObjectByUUID(item.uuid, { emitEvent: false });
   viewerAdapter.focusObjectsByUUIDs(getSceneDeviceUuids(item));
   setSelectedDeviceUuid?.(item.uuid);
   syncSelections?.(item);
@@ -136,7 +135,7 @@ export async function locateSystem({
   setSelectedSystemNodeId?.(nodeId);
   setSelectedDeviceUuid?.(devices[0].uuid);
   syncSelections?.(devices[0]);
-  viewerAdapter.highlightObjectByUUID(devices[0].uuid);
+  viewerAdapter.selectObjectByUUID(devices[0].uuid, { emitEvent: false });
   viewerAdapter.focusObjectsByUUIDs(getSceneDevicesUuids(devices));
   await selectTreeNodeByUUID?.(devices[0].uuid, { openPanel: false });
 
@@ -175,7 +174,7 @@ export async function locateRegion({
   setSelectedSystemNodeId?.(devices[0].nodeId || "");
   setSelectedQuickKks?.(devices[0].kks || "");
   setSelectedDeviceUuid?.(devices[0].uuid);
-  viewerAdapter.highlightObjectByUUID(devices[0].uuid);
+  viewerAdapter.selectObjectByUUID(devices[0].uuid, { emitEvent: false });
   viewerAdapter.focusObjectsByUUIDs(getSceneDevicesUuids(devices));
   await selectTreeNodeByUUID?.(devices[0].uuid, { openPanel: false });
 
@@ -224,8 +223,7 @@ export async function isolateDevice({
     return false;
   }
 
-  viewerAdapter.selectObjectByUUID(item.uuid);
-  viewerAdapter.highlightObjectByUUID(item.uuid);
+  viewerAdapter.selectObjectByUUID(item.uuid, { emitEvent: false });
   viewerAdapter.showOnlyUUIDs(getSceneDeviceUuids(item));
   viewerAdapter.focusObjectsByUUIDs(getSceneDeviceUuids(item));
   setSelectedDeviceUuid?.(item.uuid);

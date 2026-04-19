@@ -161,17 +161,10 @@ export class ObjectPicker {
       meshUuids: meshes.map(item => item.uuid),
       type: this.selectedObject.type,
       userData: this.selectedObject.userData,
-      geometry: this.selectedObject.geometry
-        ? {
-            vertices:
-              this.selectedObject.geometry.attributes?.position?.count || 0,
-            faces: Math.floor(
-              (this.selectedObject.geometry.index?.count ||
-                this.selectedObject.geometry.attributes?.position?.count ||
-                0) / 3
-            )
-          }
-        : null,
+      geometry: this._buildGeometrySummary(
+        meshes,
+        this.selectedObject.geometry
+      ),
       boundingBox: this._getBoundingBox(this.selectedObject),
       position: this.selectedObject.position.toArray(),
       rotation: this.selectedObject.rotation.toArray().slice(0, 3),
@@ -293,14 +286,15 @@ export class ObjectPicker {
       );
 
       const hit = intersects[0];
+      const resolvedTarget = this._resolveSelectionTarget(hit?.object || null);
 
       this.clearHighlight();
-      if (hit && hit.object !== this.selectedObject) {
-        this.highlightedObject = hit.object;
-        this._applyHoverHelper(hit.object);
+      if (hit && resolvedTarget && resolvedTarget !== this.selectedObject) {
+        this.highlightedObject = resolvedTarget;
+        this._applyHoverHelper(resolvedTarget);
 
         if (this.onHover) {
-          this.onHover(hit.object, hit.point);
+          this.onHover(resolvedTarget, hit.point);
         }
       }
     });
@@ -335,22 +329,19 @@ export class ObjectPicker {
 
     const hit = intersects[0];
 
+    // 先移除悬停材质，再应用选中材质，避免把 hover 克隆材质记成选中的原材质。
+    this.clearHighlight();
+
     // 清除之前的选中
     this.clearSelection();
 
     if (hit) {
       const resolvedTarget = this._resolveSelectionTarget(hit.object);
-      console.log("[ObjectPicker] pick debug", {
-        hitObject: hit.object,
-        resolvedTarget,
-        scene: this.scene,
-        parentChain: this._buildParentChain(hit.object)
-      });
       this._selectObject(hit.object);
 
       if (this.onSelect) {
         this.onSelect(
-          hit.object,
+          resolvedTarget,
           this.getSelectedProperties(),
           hit.point?.clone?.() || null
         );
@@ -482,35 +473,59 @@ export class ObjectPicker {
   _resolveSelectionTarget(obj) {
     if (!obj) return null;
     const modelType = String(obj.userData?.sceneModelType || "").toLowerCase();
-    const objectName = String(obj.name || "").trim();
     const parent = obj.parent;
 
-    if (
-      modelType === "glb" &&
-      obj.isMesh &&
-      objectName.includes("(网格)") &&
-      parent?.type === "Group"
-    ) {
+    if (this._shouldSelectParentGroup({ obj, parent, modelType })) {
       return parent;
     }
 
     return obj;
   }
 
-  _buildParentChain(obj) {
-    const chain = [];
-    let current = obj;
-    while (current) {
-      chain.push({
-        name: current.name || "",
-        uuid: current.uuid || "",
-        type: current.type || "",
-        isMesh: Boolean(current.isMesh),
-        sceneModelType: current.userData?.sceneModelType || ""
-      });
-      current = current.parent;
+  _shouldSelectParentGroup({ obj, parent, modelType }) {
+    if (!obj?.isMesh) return false;
+    if (!["glb", "gltf"].includes(modelType)) return false;
+    if (!parent || parent === this.pickRoot || parent === this.scene) {
+      return false;
     }
-    return chain;
+    if (parent.type !== "Group") return false;
+    if (parent.userData?.isHelper || parent.userData?.isMeasure) {
+      return false;
+    }
+
+    const siblings = parent.children.filter(
+      child => !child?.userData?.isHelper && !child?.userData?.isMeasure
+    );
+    if (siblings.length <= 1) return false;
+
+    return siblings.every(child => child?.isMesh);
+  }
+
+  _buildGeometrySummary(meshes = [], fallbackGeometry = null) {
+    const targetMeshes = Array.isArray(meshes) ? meshes.filter(Boolean) : [];
+    if (!targetMeshes.length) {
+      if (!fallbackGeometry) return null;
+      const vertices = fallbackGeometry.attributes?.position?.count || 0;
+      return {
+        vertices,
+        faces: Math.floor((fallbackGeometry.index?.count || vertices || 0) / 3)
+      };
+    }
+
+    let vertices = 0;
+    let faces = 0;
+    targetMeshes.forEach(mesh => {
+      const geometry = mesh?.geometry;
+      if (!geometry) return;
+      const positionCount = geometry.attributes?.position?.count || 0;
+      vertices += positionCount;
+      faces += Math.floor((geometry.index?.count || positionCount || 0) / 3);
+    });
+
+    return {
+      vertices,
+      faces
+    };
   }
 
   _getBoundingBox(obj) {

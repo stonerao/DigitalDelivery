@@ -1088,6 +1088,7 @@ const {
   toolOptions,
   presetViews,
   measurementModeOptions,
+  selectedCount,
   interactionMode,
   syncRoamingState,
   onToolChange,
@@ -2411,7 +2412,7 @@ async function selectSceneAnchor(item, kind = "anchor") {
     runtimeStore.setSelectedCameraId("");
   }
   if (item.objectUuid) {
-    viewerAdapter.highlightObjectByUUID(item.objectUuid);
+    viewerAdapter.selectObjectByUUID(item.objectUuid, { emitEvent: false });
     viewerAdapter.focusObjectByUUID(item.objectUuid);
     await selectTreeNodeByUUID(item.objectUuid, { openPanel: false });
   }
@@ -2425,7 +2426,7 @@ function openAnchorDetail(anchor) {
   viewerAdapter.clearSelection();
   anchorDetailVisible.value = true;
   if (anchor.objectUuid) {
-    viewerAdapter.highlightObjectByUUID(anchor.objectUuid);
+    viewerAdapter.selectObjectByUUID(anchor.objectUuid, { emitEvent: false });
     viewerAdapter.focusObjectByUUID(anchor.objectUuid);
   }
 }
@@ -2438,7 +2439,7 @@ function openCameraVideo(anchor) {
   viewerAdapter.clearSelection();
   runtimeStore.openVideoDialog(anchor);
   if (anchor.objectUuid) {
-    viewerAdapter.highlightObjectByUUID(anchor.objectUuid);
+    viewerAdapter.selectObjectByUUID(anchor.objectUuid, { emitEvent: false });
     viewerAdapter.focusObjectByUUID(anchor.objectUuid);
   }
 }
@@ -2972,7 +2973,7 @@ async function locateModelInstance(instanceId, withMessage = true) {
 
   selectedDeviceUuid.value = devices[0].uuid;
   syncNavigationSelections(devices[0]);
-  viewerAdapter.highlightObjectByUUID(devices[0].uuid);
+  viewerAdapter.selectObjectByUUID(devices[0].uuid, { emitEvent: false });
   viewerAdapter.focusObjectsByUUIDs(
     devices.flatMap(item =>
       Array.isArray(item.meshUuids) && item.meshUuids.length

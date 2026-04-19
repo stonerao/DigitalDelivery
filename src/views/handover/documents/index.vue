@@ -1,5 +1,13 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch
+} from "vue";
+import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
 import { useUserStoreHook } from "@/store/modules/user";
@@ -11,6 +19,7 @@ import FilePreview from "./components/FilePreview.vue";
 import {
   batchDownloadHandoverDocuments,
   createHandoverDocFolder,
+  deleteHandoverDocFolder,
   deleteHandoverDocuments,
   downloadHandoverDocumentFile,
   exportHandoverDocFolder,
@@ -22,6 +31,7 @@ import {
   moveHandoverDocFolder,
   moveHandoverDocuments,
   purgeHandoverDocuments,
+  renameHandoverDocFolder,
   restoreHandoverDocuments,
   rollbackHandoverDocumentVersion,
   updateHandoverDocument,
@@ -79,6 +89,14 @@ const folderTreeData = ref([
     children: []
   }
 ]);
+
+const ROOT_FOLDER_ID = "root";
+const folderTreeMenuVisible = ref(false);
+const folderTreeMenuNode = ref(null);
+const folderTreeMenuStyle = ref({
+  left: "0px",
+  top: "0px"
+});
 
 function unwrapData(resp) {
   return resp?.data ?? resp ?? {};
@@ -201,6 +219,37 @@ function findFolderLabel(nodes = [], targetId = "") {
   return "";
 }
 
+function findFolderNode(nodes = [], targetId = "") {
+  for (const node of nodes) {
+    if (node.id === targetId) return node;
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      const childNode = findFolderNode(node.children, targetId);
+      if (childNode) return childNode;
+    }
+  }
+  return null;
+}
+
+function collectDescendantIds(node, result = new Set()) {
+  if (!node || !Array.isArray(node.children)) return result;
+  node.children.forEach(child => {
+    result.add(child.id);
+    collectDescendantIds(child, result);
+  });
+  return result;
+}
+
+function isFolderProtected(node) {
+  return !node || node.id === ROOT_FOLDER_ID || Boolean(node.isDefault);
+}
+
+function getFolderDropParentId(dropNode, dropType) {
+  if (dropType === "inside") {
+    return dropNode?.data?.id || ROOT_FOLDER_ID;
+  }
+  return dropNode?.data?.parentId || ROOT_FOLDER_ID;
+}
+
 async function loadDictionaries() {
   try {
     const [nodeRes, kksRes] = await Promise.all([
@@ -257,6 +306,9 @@ async function loadFolders() {
     const normalized = list.map(normalizeFolderNode).filter(Boolean);
     if (normalized.length) {
       folderTreeData.value = normalized;
+      if (!findFolderNode(normalized, selectedFolderId.value)) {
+        selectedFolderId.value = ROOT_FOLDER_ID;
+      }
       return;
     }
   } catch (error) {
@@ -264,7 +316,7 @@ async function loadFolders() {
   }
   folderTreeData.value = [
     {
-      id: "root",
+      id: ROOT_FOLDER_ID,
       label: "全部文档",
       parentId: "",
       children: []
@@ -368,6 +420,17 @@ onMounted(() => {
   loadDictionaries();
   loadFolders();
   loadDocuments().then(() => locateById());
+  window.addEventListener("click", closeFolderContextMenu);
+  window.addEventListener("contextmenu", closeFolderContextMenu);
+  window.addEventListener("resize", closeFolderContextMenu);
+  window.addEventListener("scroll", closeFolderContextMenu, true);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("click", closeFolderContextMenu);
+  window.removeEventListener("contextmenu", closeFolderContextMenu);
+  window.removeEventListener("resize", closeFolderContextMenu);
+  window.removeEventListener("scroll", closeFolderContextMenu, true);
 });
 
 watch(
@@ -558,8 +621,11 @@ function confirmRename() {
 
 const folderVisible = ref(false);
 const folderName = ref("");
-function openNewFolder() {
+const folderParentId = ref(ROOT_FOLDER_ID);
+function openNewFolder(parentNode) {
   folderName.value = "";
+  folderParentId.value =
+    parentNode?.id || selectedFolderId.value || ROOT_FOLDER_ID;
   folderVisible.value = true;
 }
 
@@ -571,12 +637,16 @@ function confirmNewFolder() {
   }
   createHandoverDocFolder({
     name: value,
-    parentId: selectedFolderId.value || "root"
+    parentId: folderParentId.value || ROOT_FOLDER_ID
   })
     .then(() => {
       folderVisible.value = false;
       message(`已创建文件夹：${value}`, { type: "success" });
-      loadFolders();
+      return loadFolders();
+    })
+    .then(() => {
+      selectedFolderId.value = folderParentId.value || ROOT_FOLDER_ID;
+      loadDocuments();
     })
     .catch(error => {
       console.error("create folder failed", error);
@@ -843,21 +913,48 @@ function open3dViewer() {
   router.push("/visualization/3d-viewer");
 }
 
-function onFolderDrop(draggingNode, dropNode, dropType) {
+function allowFolderDrag(node) {
+  return !isFolderProtected(node?.data);
+}
+
+function allowFolderDrop(draggingNode, dropNode, dropType) {
   const dragId = draggingNode?.data?.id;
   const dropId = dropNode?.data?.id;
-  if (!dragId || dragId === "root") return;
+  if (!dragId || dragId === ROOT_FOLDER_ID || !dropId) return false;
+  if (dropType !== "inside" && dropId === ROOT_FOLDER_ID) return false;
 
-  const targetParentId =
-    dropType === "inside" ? dropId : dropNode?.data?.parentId || "root";
+  const draggingFolder = findFolderNode(folderTreeData.value, dragId);
+  if (!draggingFolder) return false;
+
+  if (dropType === "inside" && dragId === dropId) return false;
+  const descendantIds = collectDescendantIds(draggingFolder);
+  if (dropType === "inside" && descendantIds.has(dropId)) return false;
+
+  const targetParentId = getFolderDropParentId(dropNode, dropType);
+  if (dragId === targetParentId) return false;
+  if (descendantIds.has(targetParentId)) return false;
+  return true;
+}
+
+function onFolderDrop(draggingNode, dropNode, dropType) {
+  const dragId = draggingNode?.data?.id;
+  if (!allowFolderDrop(draggingNode, dropNode, dropType)) {
+    message("不支持拖拽到该位置", { type: "warning" });
+    return;
+  }
+
+  const targetParentId = getFolderDropParentId(dropNode, dropType);
 
   moveHandoverDocFolder({
     id: dragId,
-    targetParentId: targetParentId || "root"
+    targetParentId: targetParentId || ROOT_FOLDER_ID
   })
     .then(() => {
       message("已更新目录结构", { type: "success" });
-      loadFolders();
+      return loadFolders();
+    })
+    .then(() => {
+      loadDocuments();
     })
     .catch(error => {
       console.error("move folder failed", error);
@@ -865,10 +962,154 @@ function onFolderDrop(draggingNode, dropNode, dropType) {
     });
 }
 
+function closeFolderContextMenu() {
+  folderTreeMenuVisible.value = false;
+  folderTreeMenuNode.value = null;
+}
+
+function openFolderContextMenu(event, node) {
+  event.preventDefault();
+  event.stopPropagation();
+  folderTreeMenuNode.value = node;
+  folderTreeMenuStyle.value = {
+    left: `${event.clientX + 4}px`,
+    top: `${event.clientY + 4}px`
+  };
+  folderTreeMenuVisible.value = true;
+}
+
 function onFolderClick(node) {
-  selectedFolderId.value = node?.id || "root";
+  closeFolderContextMenu();
+  selectedFolderId.value = node?.id || ROOT_FOLDER_ID;
   pagination.value.page = 1;
   loadDocuments();
+}
+
+const folderRenameVisible = ref(false);
+const folderRenameValue = ref("");
+const folderActionNode = ref(null);
+
+function openFolderRename(node) {
+  closeFolderContextMenu();
+  if (!node?.id || node.id === ROOT_FOLDER_ID) return;
+  folderActionNode.value = node;
+  folderRenameValue.value = node.label || "";
+  folderRenameVisible.value = true;
+}
+
+function confirmFolderRename() {
+  const folder = folderActionNode.value;
+  const name = folderRenameValue.value.trim();
+  if (!folder?.id) return;
+  if (!name) {
+    message("目录名称不能为空", { type: "warning" });
+    return;
+  }
+  renameHandoverDocFolder({
+    id: folder.id,
+    name
+  })
+    .then(() => {
+      folderRenameVisible.value = false;
+      message("目录已重命名", { type: "success" });
+      return loadFolders();
+    })
+    .catch(error => {
+      console.error("rename folder failed", error);
+      message(error?.message || "目录重命名失败", { type: "error" });
+    });
+}
+
+const folderMoveVisible = ref(false);
+const folderMoveNode = ref(null);
+const folderMoveTargetParentId = ref(ROOT_FOLDER_ID);
+
+function openFolderMove(node) {
+  closeFolderContextMenu();
+  if (isFolderProtected(node)) return;
+  folderMoveNode.value = node;
+  folderMoveTargetParentId.value = node?.parentId || ROOT_FOLDER_ID;
+  folderMoveVisible.value = true;
+}
+
+function isValidFolderMoveTarget(targetId) {
+  const folder = folderMoveNode.value;
+  if (!folder?.id) return false;
+  if (folder.id === targetId) return false;
+  const currentNode = findFolderNode(folderTreeData.value, folder.id);
+  const descendantIds = collectDescendantIds(currentNode);
+  return !descendantIds.has(targetId);
+}
+
+function onFolderMoveTreeClick(node) {
+  const targetId = node?.id || ROOT_FOLDER_ID;
+  if (!isValidFolderMoveTarget(targetId)) {
+    message("不能移动到当前目录或其子目录下", { type: "warning" });
+    return;
+  }
+  folderMoveTargetParentId.value = targetId;
+}
+
+function confirmFolderMove() {
+  const folder = folderMoveNode.value;
+  const targetParentId = folderMoveTargetParentId.value || ROOT_FOLDER_ID;
+  if (!folder?.id) return;
+  if (!isValidFolderMoveTarget(targetParentId)) {
+    message("请选择有效的目标目录", { type: "warning" });
+    return;
+  }
+
+  moveHandoverDocFolder({
+    id: folder.id,
+    targetParentId
+  })
+    .then(() => {
+      folderMoveVisible.value = false;
+      message("目录已移动", { type: "success" });
+      return loadFolders();
+    })
+    .then(() => {
+      loadDocuments();
+    })
+    .catch(error => {
+      console.error("move folder by dialog failed", error);
+      message(error?.message || "目录移动失败", { type: "error" });
+    });
+}
+
+async function removeFolder(node) {
+  closeFolderContextMenu();
+  if (isFolderProtected(node)) {
+    message("默认目录不支持删除", { type: "warning" });
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除目录“${node.label || "未命名目录"}”吗？`,
+      "删除目录",
+      {
+        type: "warning",
+        confirmButtonText: "删除",
+        cancelButtonText: "取消"
+      }
+    );
+    await deleteHandoverDocFolder({
+      ids: [node.id]
+    });
+    if (selectedFolderId.value === node.id) {
+      selectedFolderId.value = node.parentId || ROOT_FOLDER_ID;
+    }
+    message("目录已删除", { type: "success" });
+    await loadFolders();
+    loadDocuments();
+  } catch (error) {
+    if (error === "cancel" || error === "close" || error?.action === "cancel") {
+      return;
+    }
+    console.error("delete folder failed", error);
+    message(error?.message || "目录删除失败", { type: "error" });
+  }
 }
 
 const importVisible = ref(false);
@@ -961,11 +1202,24 @@ const docTypes = computed(() => {
   return Array.from(set.values()).sort();
 });
 
+const selectedFolderNode = computed(() => {
+  return findFolderNode(
+    folderTreeData.value,
+    selectedFolderId.value || ROOT_FOLDER_ID
+  );
+});
+
 const selectedFolderLabel = computed(() => {
   return (
-    findFolderLabel(folderTreeData.value, selectedFolderId.value || "root") ||
-    "全部文档"
+    findFolderLabel(
+      folderTreeData.value,
+      selectedFolderId.value || ROOT_FOLDER_ID
+    ) || "全部文档"
   );
+});
+
+const selectedFolderDocCount = computed(() => {
+  return Number(pagination.value.total || 0);
 });
 </script>
 
@@ -974,7 +1228,7 @@ const selectedFolderLabel = computed(() => {
     <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
       <div class="flex flex-wrap gap-2">
         <el-button type="primary" @click="openUpload">上传文档</el-button>
-        <el-button @click="openNewFolder">新建文件夹</el-button>
+        <el-button @click="openNewFolder()">新建文件夹</el-button>
         <el-button @click="doExport">导出目录(JSON)</el-button>
         <el-button @click="openImport">导入目录(JSON)</el-button>
         <el-button :loading="isBatchZipping" @click="batchDownload"
@@ -1001,7 +1255,12 @@ const selectedFolderLabel = computed(() => {
       <el-col :xs="24" :lg="6" class="mb-4">
         <el-card shadow="never">
           <template #header>
-            <div class="font-semibold">目录结构</div>
+            <div class="flex items-center justify-between gap-2">
+              <div class="font-semibold">目录结构</div>
+              <el-button text type="primary" @click="openNewFolder()">
+                新建根目录
+              </el-button>
+            </div>
           </template>
           <el-tree
             :data="folderTreeData"
@@ -1010,9 +1269,70 @@ const selectedFolderLabel = computed(() => {
             highlight-current
             :current-node-key="selectedFolderId"
             draggable
+            :allow-drag="allowFolderDrag"
+            :allow-drop="allowFolderDrop"
             @node-click="onFolderClick"
             @node-drop="onFolderDrop"
-          />
+          >
+            <template #default="{ data }">
+              <div
+                class="folder-tree-node"
+                @contextmenu="openFolderContextMenu($event, data)"
+              >
+                <span class="folder-tree-node__label" :title="data.label">
+                  {{ data.label }}
+                </span>
+              </div>
+            </template>
+          </el-tree>
+          <div
+            v-if="folderTreeMenuVisible && folderTreeMenuNode"
+            class="folder-tree-context-menu"
+            :style="folderTreeMenuStyle"
+            @click.stop
+            @contextmenu.prevent
+          >
+            <button
+              type="button"
+              class="folder-tree-context-menu__item"
+              @click="openNewFolder(folderTreeMenuNode)"
+            >
+              新建子目录
+            </button>
+            <button
+              v-if="folderTreeMenuNode.id !== ROOT_FOLDER_ID"
+              type="button"
+              class="folder-tree-context-menu__item"
+              @click="openFolderRename(folderTreeMenuNode)"
+            >
+              重命名
+            </button>
+            <button
+              v-if="!isFolderProtected(folderTreeMenuNode)"
+              type="button"
+              class="folder-tree-context-menu__item"
+              @click="openFolderMove(folderTreeMenuNode)"
+            >
+              移动
+            </button>
+            <button
+              v-if="!isFolderProtected(folderTreeMenuNode)"
+              type="button"
+              class="folder-tree-context-menu__item folder-tree-context-menu__item--danger"
+              @click="removeFolder(folderTreeMenuNode)"
+            >
+              删除
+            </button>
+          </div>
+          <div
+            class="mt-3 rounded-md bg-[var(--el-fill-color-light)] p-3 text-xs text-[var(--el-text-color-secondary)]"
+          >
+            <div>当前目录：{{ selectedFolderLabel }}</div>
+            <div>当前目录文档数：{{ selectedFolderDocCount }}</div>
+            <div>
+              拖拽可调整层级，默认目录不允许删除；也可用“移动”进行精确调整。
+            </div>
+          </div>
           <div class="text-xs text-[var(--el-text-color-secondary)] mt-3">
             说明：目录已对接后端接口，支持导入/导出目录 JSON。
           </div>
@@ -1109,7 +1429,7 @@ const selectedFolderLabel = computed(() => {
                 </span>
               </div>
               <div class="text-xs text-[var(--el-text-color-secondary)]">
-                当前目录：{{ selectedFolderId }}
+                当前目录：{{ selectedFolderLabel }}
               </div>
             </div>
           </template>
@@ -1585,6 +1905,28 @@ const selectedFolderLabel = computed(() => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="folderMoveVisible" title="移动目录" width="560px">
+      <div class="text-sm">
+        <div class="mb-2 text-[var(--el-text-color-secondary)]">
+          当前目录：{{ folderMoveNode?.label || "-" }}
+        </div>
+        <el-tree
+          :data="folderTreeData"
+          node-key="id"
+          default-expand-all
+          highlight-current
+          :current-node-key="folderMoveTargetParentId"
+          @node-click="onFolderMoveTreeClick"
+        />
+      </div>
+      <template #footer>
+        <el-space>
+          <el-button @click="folderMoveVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmFolderMove">确定</el-button>
+        </el-space>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="importVisible" title="导入目录结构(JSON)" width="720px">
       <el-input
         v-model="importText"
@@ -1609,10 +1951,24 @@ const selectedFolderLabel = computed(() => {
     </el-dialog>
 
     <el-dialog v-model="folderVisible" title="新建文件夹" width="480px">
+      <div class="mb-3 text-sm text-[var(--el-text-color-secondary)]">
+        上级目录：{{
+          findFolderLabel(folderTreeData, folderParentId || ROOT_FOLDER_ID) ||
+          "全部文档"
+        }}
+      </div>
       <el-input v-model="folderName" placeholder="请输入文件夹名称" />
       <template #footer>
         <el-button @click="folderVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmNewFolder">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="folderRenameVisible" title="重命名目录" width="480px">
+      <el-input v-model="folderRenameValue" placeholder="请输入目录名称" />
+      <template #footer>
+        <el-button @click="folderRenameVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmFolderRename">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1621,5 +1977,53 @@ const selectedFolderLabel = computed(() => {
 <style scoped>
 .dd-row-highlight td {
   background-color: var(--el-color-primary-light-9) !important;
+}
+
+.folder-tree-node {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.folder-tree-node__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-tree-context-menu {
+  position: fixed;
+  z-index: 2100;
+  min-width: 140px;
+  padding: 6px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  background: var(--el-bg-color-overlay);
+  box-shadow: var(--el-box-shadow-light);
+}
+
+.folder-tree-context-menu__item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-tree-context-menu__item:hover {
+  background: var(--el-fill-color-light);
+}
+
+.folder-tree-context-menu__item--danger {
+  color: var(--el-color-danger);
 }
 </style>

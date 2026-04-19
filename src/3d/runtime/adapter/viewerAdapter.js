@@ -43,10 +43,12 @@ export function createViewerAdapter() {
     setMaterialTheme: theme => invoke("setMaterialTheme", theme),
     toggleProjection: () => invoke("toggleProjection"),
     setPresetView: preset => invoke("setPresetView", preset),
-    selectObjectByUUID: uuid => invoke("selectByUUID", uuid),
+    selectObjectByUUID: (uuid, options) =>
+      invoke("selectByUUID", uuid, options),
     clearSelection: () => invoke("clearSelection"),
     getSelectedObject: () => invoke("getSelectedObject"),
-    highlightObjectByUUID: uuid => invoke("highlightByUUID", uuid),
+    highlightObjectByUUID: (uuid, options) =>
+      invoke("selectByUUID", uuid, options),
     focusObjectByUUID: uuid => invoke("focusByUUID", uuid),
     focusObjectsByUUIDs: uuids => invoke("focusByUUIDs", uuids),
     getSceneTree: () => invoke("getSceneTree"),

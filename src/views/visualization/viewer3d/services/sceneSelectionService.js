@@ -64,7 +64,7 @@ export async function selectTreeNodeByUUID({
   expandTreeToUUID?.(uuid);
   await nextTick?.();
   scrollCurrentTreeNodeIntoView?.(uuid);
-  viewerAdapter?.highlightObjectByUUID?.(uuid);
+  viewerAdapter?.selectObjectByUUID?.(uuid, { emitEvent: false });
   return true;
 }
 
@@ -82,7 +82,6 @@ export async function onObjectSelect({
   selectTreeNodeByUUID
 }) {
   runtimeStore?.setSelectedObject?.(info);
-  setSelectedDeviceUuid?.(info?.uuid || "");
 
   const device = sceneDevices.find(item => {
     if (!item) return false;
@@ -90,6 +89,7 @@ export async function onObjectSelect({
     const meshUuids = Array.isArray(item.meshUuids) ? item.meshUuids : [];
     return meshUuids.includes(info?.uuid);
   });
+  setSelectedDeviceUuid?.(device?.uuid || info?.uuid || "");
   syncNavigationSelections?.(device);
   setShowObjectPanel?.(true);
   syncMeasurementPoints?.();
