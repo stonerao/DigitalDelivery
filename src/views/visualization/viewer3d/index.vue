@@ -16,10 +16,18 @@ import {
   getHandoverProjectDetail,
   updateHandoverProject
 } from "@/api/handoverProjects";
-import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
 import ViewerBottomToolbar from "./toolbars/ViewerBottomToolbar.vue";
 import StructurePanel from "./panels/StructurePanel.vue";
 import { buildTreeNodeIndex } from "./services/sceneTreeService";
+import {
+  createViewerSceneModel,
+  normalizeViewerModelItem,
+  parseViewerProjectInfo,
+  readViewerApiRecords,
+  serializeSceneModels,
+  serializeSceneObjectBindings,
+  unwrapViewerApiData
+} from "./services/sceneProjectPersistenceService";
 import { useViewerToolbarState } from "./services/useViewerToolbarState";
 
 defineOptions({
@@ -48,57 +56,6 @@ const uploadVisible = ref(false);
 const viewerRef = ref(null);
 const ifcWasmPath = computed(() => `${import.meta.env.BASE_URL || "/"}wasm/`);
 
-function unwrapData(resp) {
-  return resp?.data ?? resp ?? {};
-}
-
-function readRecords(data) {
-  return Array.isArray(data?.records) ? data.records : [];
-}
-
-function normalizeModelItem(item) {
-  return normalizeHandoverModelRecord({
-    id: item?.id || "",
-    name: item?.name || "未命名模型",
-    lod: item?.lod || "LOD300",
-    components: Number(item?.components || 0),
-    updatedAt: item?.updatedAt || "-",
-    nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
-    kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
-    url: item?.url || ""
-  });
-}
-
-function createSceneModel(detail, partial = {}) {
-  return {
-    instanceId: partial.instanceId || `scene-model-${detail.id || Date.now()}`,
-    modelId: detail.id || "",
-    modelName: detail.name || "未命名模型",
-    modelUrl: detail.url || "",
-    visible: partial.visible !== false,
-    locked: Boolean(partial.locked),
-    opacity: Number.isFinite(Number(partial.opacity))
-      ? Number(partial.opacity)
-      : 1,
-    transform: {
-      position: Array.isArray(partial.transform?.position)
-        ? partial.transform.position
-        : [0, 0, 0],
-      rotation: Array.isArray(partial.transform?.rotation)
-        ? partial.transform.rotation
-        : [0, 0, 0],
-      scale: Array.isArray(partial.transform?.scale)
-        ? partial.transform.scale
-        : [1, 1, 1]
-    },
-    metadata: {
-      lod: detail.lod || "LOD300",
-      source: "handover-model"
-    },
-    rawDetail: detail
-  };
-}
-
 const activeSceneModel = computed(() => {
   return (
     sceneModels.value.find(item => item.instanceId === currentModel.value) ||
@@ -116,8 +73,8 @@ async function loadModels(showSuccess = false) {
   modelListLoading.value = true;
   try {
     const res = await getHandoverModelList({ page: 1, size: 100 });
-    const data = unwrapData(res);
-    const rows = readRecords(data).map(normalizeModelItem);
+    const data = unwrapViewerApiData(res);
+    const rows = readViewerApiRecords(data).map(normalizeViewerModelItem);
     modelOptions.value = rows.map(item => ({
       label: item.name,
       value: item.id,
@@ -140,7 +97,7 @@ async function loadModelDetailById(id) {
 
   try {
     const detailRes = await getHandoverModelDetail({ id });
-    const detail = normalizeModelItem(unwrapData(detailRes));
+    const detail = normalizeViewerModelItem(unwrapViewerApiData(detailRes));
     if (!detail.url) {
       message("当前模型缺少可预览地址", { type: "warning" });
     }
@@ -171,11 +128,19 @@ async function syncSceneModelsByIds(ids = [], scenePayload = null) {
   const nextSceneModels = detailList.map((detail, index) => {
     const partial =
       scenePayload?.models?.find(item => item.modelId === detail.id) || {};
-    return createSceneModel(detail, {
-      ...partial,
-      instanceId:
-        partial.instanceId || `scene-model-${detail.id || index + 1}-${index}`
-    });
+    return createViewerSceneModel(
+      detail,
+      {
+        ...partial,
+        instanceId:
+          partial.instanceId || `scene-model-${detail.id || index + 1}-${index}`
+      },
+      {
+        defaultMetadata: {
+          source: "handover-model"
+        }
+      }
+    );
   });
 
   sceneModels.value = nextSceneModels;
@@ -196,43 +161,12 @@ async function applyModelFromRoute() {
   return true;
 }
 
-function parseProjectInfo(rawValue) {
-  if (!rawValue) return null;
-  if (typeof rawValue === "object") return rawValue;
-  try {
-    return JSON.parse(String(rawValue));
-  } catch (error) {
-    console.error("parse projectInfo failed", error);
-    return null;
-  }
-}
-
 function normalizeActiveRightTab(value) {
   return value === "navigation" || !value ? "structure" : value;
 }
 
 function buildProjectInfoPayload() {
-  const objectBindings = sceneDevices.value
-    .filter(item => item?.uuid)
-    .map(item => ({
-      bindingId: `binding-${item.instanceId || "default"}-${item.uuid}`,
-      instanceId: item.instanceId || "",
-      objectUuid: item.uuid,
-      meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
-      objectName: item.name || "",
-      path: item.path || "",
-      businessBinding: {
-        nodeId: item.nodeId || "",
-        kks: item.kks || "",
-        tag: "",
-        bindingType: item.kks ? "device" : "custom"
-      },
-      properties: {
-        customName: item.name || "",
-        systemName: item.systemName || "",
-        status: item.status || "-"
-      }
-    }));
+  const objectBindings = serializeSceneObjectBindings(sceneDevices.value);
 
   return {
     version: "2.0.0",
@@ -244,21 +178,7 @@ function buildProjectInfoPayload() {
     },
     scene: {
       activeModelId: activeSceneModel.value?.modelId || "",
-      models: sceneModels.value.map(item => ({
-        instanceId: item.instanceId,
-        modelId: item.modelId,
-        modelName: item.modelName,
-        modelUrl: item.modelUrl,
-        visible: item.visible !== false,
-        locked: Boolean(item.locked),
-        opacity: item.opacity ?? 1,
-        transform: item.transform || {
-          position: [0, 0, 0],
-          rotation: [0, 0, 0],
-          scale: [1, 1, 1]
-        },
-        metadata: item.metadata || {}
-      })),
+      models: serializeSceneModels(sceneModels.value),
       bindings: {
         objectBindings
       },
@@ -349,8 +269,8 @@ async function loadProjectContext() {
   projectLoading.value = true;
   try {
     const response = await getHandoverProjectDetail(projectId.value);
-    projectRecord.value = unwrapData(response);
-    const payload = parseProjectInfo(projectRecord.value?.projectInfo);
+    projectRecord.value = unwrapViewerApiData(response);
+    const payload = parseViewerProjectInfo(projectRecord.value?.projectInfo);
     pendingProjectPayload.value = payload;
     persistedObjectBindings.value =
       payload?.scene?.bindings?.objectBindings || [];
@@ -404,7 +324,7 @@ async function saveCurrentProject() {
   try {
     if (!projectRecord.value?.id) {
       const response = await getHandoverProjectDetail(projectId.value);
-      projectRecord.value = unwrapData(response);
+      projectRecord.value = unwrapViewerApiData(response);
     }
     const payload = buildProjectInfoPayload();
     await updateHandoverProject({
@@ -436,7 +356,7 @@ async function waitUploadTask(taskId) {
 
   for (let i = 0; i < 20; i++) {
     const res = await getHandoverModelUploadTask({ taskId });
-    const data = unwrapData(res);
+    const data = unwrapViewerApiData(res);
     const status = String(data?.status || "").toLowerCase();
     if (doneStatus.some(s => status.includes(s))) return;
     if (failedStatus.some(s => status.includes(s))) {
@@ -457,7 +377,7 @@ async function onConfirmUpload(payload) {
 
   try {
     const uploadRes = await uploadHandoverModel({ data: formData });
-    const uploadData = unwrapData(uploadRes);
+    const uploadData = unwrapViewerApiData(uploadRes);
     await waitUploadTask(uploadData?.taskId || "");
     message("模型已上传并完成入库", { type: "success" });
     await loadModels(true);

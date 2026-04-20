@@ -10,11 +10,13 @@ import {
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
-import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
 import { getConfig } from "@/config";
 import { ThreeModelViewer } from "@/3d";
 import { getHandoverKksList } from "@/api/handoverData";
-import { getHandoverDocumentList } from "@/api/handoverDocuments";
+import {
+  getHandoverDocumentDetail,
+  getHandoverDocumentList
+} from "@/api/handoverDocuments";
 import {
   getHandoverModelDetail,
   getHandoverModelList
@@ -72,6 +74,42 @@ import {
   normalizeBindingText
 } from "./services/sceneBindingService";
 import {
+  createDefaultDocumentBindingPagination,
+  fetchBoundDocumentsByRelation,
+  loadDocumentBindingOptions,
+  mergeSelectedDocumentBindings,
+  normalizeDocumentBindingOption,
+  replaceDocumentRelations,
+  syncDocumentBindingTableSelection
+} from "./services/sceneDocumentBindingService";
+import {
+  createViewerSceneModel,
+  normalizeViewerModelItem,
+  parseViewerProjectInfo,
+  serializeSceneModels,
+  serializeSceneObjectBindings
+} from "./services/sceneProjectPersistenceService";
+import {
+  applyRestoredViewerProjectState,
+  resolveRestoredViewerProjectState
+} from "./services/viewerProjectStateService";
+import {
+  handleViewerLoadedLifecycle,
+  resetViewerSceneOnModelChange
+} from "./services/viewerSceneLifecycleService";
+import {
+  handleActiveCameraChange,
+  handleVideoDialogVisibilityChange,
+  syncAssetGroupsFromManifest,
+  syncMeasurementModeOnWatcher,
+  syncMeasurementPointsOnWatcher,
+  syncRuntimeServicesIfReady,
+  syncSceneAnchorsOnWatcher,
+  syncViewerMaterialTheme,
+  syncViewerQuality,
+  syncViewerClippingAnimationOptions
+} from "./services/viewerWatcherService";
+import {
   ANCHOR_BINDING_TYPE_OPTIONS,
   CAMERA_STREAM_TYPE_OPTIONS,
   CAMERA_TYPE_OPTIONS,
@@ -128,6 +166,7 @@ import {
 } from "./services/sceneSelectionService";
 import { buildTreeNodeIndex } from "./services/sceneTreeService";
 import {
+  hasProjectPackageContent,
   loadProjectPackage,
   parseImportedProjectPackage,
   saveProjectPackage,
@@ -323,34 +362,18 @@ const navNodeDialogTargetId = ref("");
 const navNodeForm = ref({
   label: ""
 });
-const nodeDocumentDialogVisible = ref(false);
-const nodeDocumentDialogMode = ref("bind");
-const nodeDocumentDialogLoading = ref(false);
-const nodeDocumentDialogKeyword = ref("");
-const nodeDocumentDialogRecords = ref([]);
-const nodeDocumentDialogPagination = ref({
-  page: 1,
-  size: 20,
-  total: 0
-});
-const nodeDocumentTargetId = ref("");
-const nodeDocumentTargetLabel = ref("");
-const nodeDocumentSelectedDocuments = ref([]);
-const nodeDocumentTableRef = ref(null);
-const objectDocumentDialogVisible = ref(false);
-const objectDocumentDialogMode = ref("bind");
-const objectDocumentDialogLoading = ref(false);
-const objectDocumentDialogKeyword = ref("");
-const objectDocumentDialogRecords = ref([]);
-const objectDocumentDialogPagination = ref({
-  page: 1,
-  size: 20,
-  total: 0
-});
-const objectDocumentTargetUuid = ref("");
-const objectDocumentTargetLabel = ref("");
-const objectDocumentSelectedDocuments = ref([]);
-const objectDocumentTableRef = ref(null);
+const documentDialogVisible = ref(false);
+const documentDialogScope = ref("node");
+const documentDialogMode = ref("bind");
+const documentDialogLoading = ref(false);
+const documentDialogKeyword = ref("");
+const documentDialogRecords = ref([]);
+const documentDialogPagination = ref(createDefaultDocumentBindingPagination());
+const documentDialogTargetId = ref("");
+const documentDialogTargetLabel = ref("");
+const documentDialogSelectedDocuments = ref([]);
+const documentDialogTableRef = ref(null);
+const documentDialogSourceId = ref("");
 
 const activeModelDetail = ref(null);
 
@@ -370,16 +393,11 @@ const modelName = computed(() => {
   ).trim();
 });
 
-function normalizeModelItem(item) {
-  return normalizeHandoverModelRecord({
-    id: item?.id || "",
-    name: item?.name || "未命名模型",
-    lod: item?.lod || "LOD300",
-    components: Number(item?.components || 0),
-    updatedAt: item?.updatedAt || "-",
-    nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
-    kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
-    url: item?.url || ""
+function createFullscreenSceneModel(detail = {}, partial = {}) {
+  return createViewerSceneModel(detail, partial, {
+    buildInstanceId: item =>
+      `scene-model-${item.id || Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    includeSystemBinding: true
   });
 }
 
@@ -581,29 +599,100 @@ async function listModelObjectRelationsBySourceAndType(sourceId, type) {
   return Array.isArray(response?.data) ? response.data : [];
 }
 
+async function listAllRelationRecords(params = {}) {
+  const pageSize = 1000;
+  const records = [];
+  const seenIds = new Set();
+  let page = 1;
+  let total = Number.POSITIVE_INFINITY;
+
+  while (records.length < total) {
+    const data = unwrapApiData(
+      await pageQueryRelationRecords({
+        ...params,
+        page,
+        size: pageSize
+      }),
+      "加载关系记录失败"
+    );
+    const rows = Array.isArray(data?.records) ? data.records : [];
+    rows.forEach(item => {
+      const id = String(item?.id || "").trim();
+      if (id && seenIds.has(id)) return;
+      if (id) seenIds.add(id);
+      records.push(item);
+    });
+
+    const parsedTotal = Number(data?.total);
+    if (Number.isFinite(parsedTotal) && parsedTotal >= 0) {
+      total = parsedTotal;
+    }
+
+    if (!rows.length || rows.length < pageSize) {
+      break;
+    }
+    page += 1;
+  }
+
+  return records;
+}
+
+async function fetchDocumentOptionById(id = "") {
+  const targetId = String(id || "").trim();
+  if (!targetId) return null;
+  try {
+    const detail = unwrapApiData(
+      await getHandoverDocumentDetail(targetId),
+      "加载文档详情失败"
+    );
+    return normalizeDocumentBindingOption(detail);
+  } catch (error) {
+    console.error("load handover document detail failed", error);
+    return null;
+  }
+}
+
 async function fetchDocumentOptionsByIds(ids = []) {
   const normalizedIds = Array.from(
     new Set(ids.map(id => String(id || "").trim()).filter(Boolean))
   );
   if (!normalizedIds.length) return [];
-  const data = unwrapApiData(
-    await getHandoverDocumentList({
-      searchMode: "fuzzy",
-      recycleBin: false,
-      page: 1,
-      size: Math.max(100, normalizedIds.length * 2)
-    }),
-    "加载文档列表失败"
-  );
-  const records = Array.isArray(data?.records) ? data.records : [];
-  const map = new Map(
+  const map = new Map();
+
+  try {
+    const data = unwrapApiData(
+      await getHandoverDocumentList({
+        searchMode: "fuzzy",
+        recycleBin: false,
+        page: 1,
+        size: Math.max(100, normalizedIds.length * 2)
+      }),
+      "加载文档列表失败"
+    );
+    const records = Array.isArray(data?.records) ? data.records : [];
     records
       .map(item => {
-        const normalized = normalizeNodeDocumentOption(item);
+        const normalized = normalizeDocumentBindingOption(item);
         return normalized ? [normalized.id, normalized] : null;
       })
       .filter(Boolean)
-  );
+      .forEach(([id, item]) => {
+        map.set(id, item);
+      });
+  } catch (error) {
+    console.error("load handover document list failed", error);
+  }
+
+  const missingIds = normalizedIds.filter(id => !map.has(id));
+  if (missingIds.length) {
+    const detailOptions = await Promise.all(
+      missingIds.map(id => fetchDocumentOptionById(id))
+    );
+    detailOptions.filter(Boolean).forEach(item => {
+      map.set(item.id, item);
+    });
+  }
+
   return normalizedIds.map(
     id => map.get(id) || { id, name: id, type: "", updatedAt: "" }
   );
@@ -616,14 +705,17 @@ async function syncSceneObjectRelationsFromBackend() {
   if (!sourceIds.length) return;
 
   try {
-    const response = await pageQueryRelationRecords({
-      sourceKind: MODEL_OBJECT_SOURCE_KIND,
-      page: 1,
-      size: Math.max(1000, sourceIds.length * 4)
-    });
-    const records = Array.isArray(response?.data?.records)
-      ? response.data.records
-      : [];
+    const [kksRecords, documentRecords] = await Promise.all([
+      listAllRelationRecords({
+        sourceKind: MODEL_OBJECT_SOURCE_KIND,
+        type: MODEL_OBJECT_KKS_RELATION_TYPE
+      }),
+      listAllRelationRecords({
+        sourceKind: MODEL_OBJECT_SOURCE_KIND,
+        type: MODEL_OBJECT_DOC_RELATION_TYPE
+      })
+    ]);
+    const records = [...kksRecords, ...documentRecords];
     const sourceIdSet = new Set(sourceIds);
     const matched = records.filter(item =>
       sourceIdSet.has(String(item?.sourceId || "").trim())
@@ -878,48 +970,6 @@ function removeNavigationNodeById(nodeId) {
   }
 }
 
-function createSceneModel(detail = {}, partial = {}) {
-  return {
-    instanceId:
-      partial.instanceId ||
-      `scene-model-${detail.id || Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
-    modelId: detail.id || partial.modelId || "",
-    modelName: detail.name || partial.modelName || "未命名模型",
-    modelUrl: detail.url || partial.modelUrl || "",
-    visible: partial.visible !== false,
-    locked: Boolean(partial.locked),
-    opacity: Number.isFinite(Number(partial.opacity))
-      ? Number(partial.opacity)
-      : 1,
-    transform: {
-      position: Array.isArray(partial.transform?.position)
-        ? partial.transform.position
-        : [0, 0, 0],
-      rotation: Array.isArray(partial.transform?.rotation)
-        ? partial.transform.rotation
-        : [0, 0, 0],
-      scale: Array.isArray(partial.transform?.scale)
-        ? partial.transform.scale
-        : [1, 1, 1]
-    },
-    systemNodeId: String(
-      partial.systemNodeId || partial.nodeId || detail.systemNodeId || ""
-    ).trim(),
-    systemNodeLabel: String(
-      partial.systemNodeLabel ||
-        partial.nodeLabel ||
-        detail.systemNodeLabel ||
-        detail.systemNodeName ||
-        ""
-    ).trim(),
-    metadata: {
-      lod: detail.lod || partial.metadata?.lod || "LOD300",
-      ...(partial.metadata || {})
-    },
-    rawDetail: detail
-  };
-}
-
 const activeSceneModel = computed(() => {
   return (
     sceneModels.value.find(item => item.modelId === activeSceneModelId.value) ||
@@ -932,7 +982,7 @@ async function fetchModelDetail(id) {
   if (!id) return null;
   try {
     const response = await getHandoverModelDetail({ id });
-    const detail = normalizeModelItem(response?.data ?? response ?? {});
+    const detail = normalizeViewerModelItem(response?.data ?? response ?? {});
     if (!detail.url) {
       message("当前模型缺少可预览地址", { type: "warning" });
     }
@@ -954,7 +1004,7 @@ async function loadAvailableModels(showSuccess = false) {
     const res = await getHandoverModelList({ page: 1, size: 200 });
     const data = res?.data ?? res ?? {};
     availableModels.value = (Array.isArray(data?.records) ? data.records : [])
-      .map(normalizeModelItem)
+      .map(normalizeViewerModelItem)
       .filter(item => item.id);
     if (showSuccess) {
       message("模型列表已刷新", { type: "success" });
@@ -992,7 +1042,7 @@ async function initializeSceneModels(projectInfo = null) {
   sceneModels.value = detailList.map(detail => {
     const partial =
       projectModels.find(item => item.modelId === detail.id) || {};
-    return createSceneModel(detail, partial);
+    return createFullscreenSceneModel(detail, partial);
   });
 
   activeSceneModelId.value =
@@ -1042,15 +1092,27 @@ function getProjectMetadata() {
   };
 }
 
-function parseProjectInfo(rawValue) {
-  if (!rawValue) return null;
-  if (typeof rawValue === "object") return rawValue;
-  try {
-    return JSON.parse(String(rawValue));
-  } catch (error) {
-    console.error("parse projectInfo failed", error);
-    return null;
-  }
+function applyProjectPackagePatch(patch = {}) {
+  const nextPackage = patchProjectPackage(
+    currentSceneSchemeScope.value,
+    patch,
+    getProjectMetadata()
+  );
+  projectStore.setProjectPackage(nextPackage);
+  return nextPackage;
+}
+
+function patchSceneProjectPackage(scenePatch = {}) {
+  return applyProjectPackagePatch({
+    metadata: getProjectMetadata(),
+    scene: scenePatch
+  });
+}
+
+function patchAssetsProjectPackage(assetsPatch = {}) {
+  return applyProjectPackagePatch({
+    assets: assetsPatch
+  });
 }
 
 async function loadHandoverProjectContext() {
@@ -1070,7 +1132,7 @@ async function loadHandoverProjectContext() {
     });
     currentProjectContext.value = {
       ...project,
-      parsedProjectInfo: parseProjectInfo(project?.projectInfo)
+      parsedProjectInfo: parseViewerProjectInfo(project?.projectInfo)
     };
     return currentProjectContext.value;
   } catch (error) {
@@ -1079,6 +1141,27 @@ async function loadHandoverProjectContext() {
     currentProjectContext.value = null;
     return null;
   }
+}
+
+async function reloadProjectSceneContext() {
+  const project = await loadHandoverProjectContext();
+  await initializeSceneModels(project?.parsedProjectInfo);
+  loadPersistedProjectState(project?.parsedProjectInfo);
+  return project;
+}
+
+async function initializeRouteSceneModel(modelId) {
+  if (sceneModels.value.length > 0) return;
+  if (!modelId) {
+    activeSceneModelId.value = "";
+    syncActiveModelDetail();
+    return;
+  }
+  const detail = await fetchModelDetail(modelId);
+  if (!detail) return;
+  sceneModels.value = [createFullscreenSceneModel(detail)];
+  activeSceneModelId.value = detail.id;
+  syncActiveModelDetail();
 }
 
 const loadedModelOptions = computed(() =>
@@ -1133,7 +1216,7 @@ async function confirmAddModels() {
   const selectedNodeLabel = getSystemNodeLabel(modelPickerNodeId.value);
   details.forEach(detail => {
     sceneModels.value.push(
-      createSceneModel(detail, {
+      createFullscreenSceneModel(detail, {
         systemNodeId: modelPickerNodeId.value || "",
         systemNodeLabel: selectedNodeLabel
       })
@@ -1357,6 +1440,7 @@ const {
   appendBookmark: bookmark => {
     bookmarks.value.push(bookmark);
     projectStore.setBookmarks(bookmarks.value);
+    persistBookmarks();
   },
   applyBookmark: bookmark => viewerAdapter.applyBookmark(bookmark),
   onToolChangeExtra: value => {
@@ -1402,17 +1486,9 @@ function buildStyledAnchorForm(
 }
 
 function persistAnchorStyleDefaults() {
-  const nextPackage = patchProjectPackage(
-    currentSceneSchemeScope.value,
-    {
-      metadata: getProjectMetadata(),
-      scene: {
-        anchorStyleDefaults: anchorStyleDefaults.value
-      }
-    },
-    getProjectMetadata()
-  );
-  projectStore.setProjectPackage(nextPackage);
+  patchSceneProjectPackage({
+    anchorStyleDefaults: anchorStyleDefaults.value
+  });
 }
 
 function handleSavePublicStyle({ kind, style }) {
@@ -1804,11 +1880,14 @@ const allLayerLeafKeys = computed(() => {
 });
 
 function persistSceneSchemes() {
-  patchProjectPackage(currentSceneSchemeScope.value, {
-    metadata: getProjectMetadata(),
-    scene: {
-      schemes: sceneSchemes.value
-    }
+  patchSceneProjectPackage({
+    schemes: sceneSchemes.value
+  });
+}
+
+function persistBookmarks() {
+  patchSceneProjectPackage({
+    bookmarks: bookmarks.value
   });
 }
 
@@ -1893,53 +1972,45 @@ function formatSchemeTime(value) {
 }
 
 function persistSceneAnchorData() {
-  const nextPackage = patchProjectPackage(
-    currentSceneSchemeScope.value,
-    {
-      metadata: getProjectMetadata(),
-      scene: {
-        anchors: anchors.value,
-        cameras: cameraAnchors.value,
-        clipping: projectClippingState.value,
-        anchorStyleDefaults: anchorStyleDefaults.value
-      }
-    },
-    getProjectMetadata()
-  );
-  projectStore.setProjectPackage(nextPackage);
+  patchSceneProjectPackage({
+    anchors: anchors.value,
+    cameras: cameraAnchors.value,
+    clipping: projectClippingState.value,
+    anchorStyleDefaults: anchorStyleDefaults.value
+  });
 }
 
 function persistClippingState() {
   const normalized = normalizeClippingState(runtimeClippingState.value);
   projectStore.setClippingState(normalized);
-  const nextPackage = patchProjectPackage(
-    currentSceneSchemeScope.value,
-    {
-      metadata: getProjectMetadata(),
-      scene: {
-        clipping: normalized
-      }
-    },
-    getProjectMetadata()
-  );
-  projectStore.setProjectPackage(nextPackage);
+  patchSceneProjectPackage({
+    clipping: normalized
+  });
 }
 
 function persistClippingPresets() {
-  const nextPackage = patchProjectPackage(
-    currentSceneSchemeScope.value,
-    {
-      metadata: getProjectMetadata(),
-      scene: {
-        clippingPresets: clippingPresets.value
-      }
-    },
-    getProjectMetadata()
-  );
-  projectStore.setProjectPackage(nextPackage);
+  patchSceneProjectPackage({
+    clippingPresets: clippingPresets.value
+  });
 }
 
 function buildProjectInfoPayload() {
+  const serializedSceneModels = serializeSceneModels(sceneModels.value, {
+    mapMetadata: item => ({
+      ...(item.metadata || {}),
+      quality: item.modelId === activeSceneModelId.value ? quality.value : ""
+    })
+  });
+  const serializedObjectBindings = serializeSceneObjectBindings(
+    sceneDevices.value,
+    {
+      bindingIdBuilder: item => `binding-${item.uuid}`,
+      resolveInstanceId: item =>
+        item.instanceId || activeSceneModel.value?.instanceId || "",
+      includeTypeInProperties: true
+    }
+  );
+
   return {
     version: "2.0.0",
     schema: "dd-handover-project-scene",
@@ -1958,51 +2029,9 @@ function buildProjectInfoPayload() {
     scene: {
       activeModelId: activeSceneModelId.value || modelId.value,
       navigationTree: systemNodeTree.value,
-      models: sceneModels.value.map(item => ({
-        instanceId: item.instanceId,
-        modelId: item.modelId,
-        modelName: item.modelName,
-        modelUrl: item.modelUrl,
-        systemNodeId: item.systemNodeId || "",
-        systemNodeLabel: item.systemNodeLabel || "",
-        visible: item.visible !== false,
-        locked: Boolean(item.locked),
-        opacity: item.opacity ?? 1,
-        transform: item.transform || {
-          position: [0, 0, 0],
-          rotation: [0, 0, 0],
-          scale: [1, 1, 1]
-        },
-        metadata: {
-          ...(item.metadata || {}),
-          quality:
-            item.modelId === activeSceneModelId.value ? quality.value : ""
-        }
-      })),
+      models: serializedSceneModels,
       bindings: {
-        objectBindings: sceneDevices.value
-          .filter(item => item?.uuid)
-          .map(item => ({
-            bindingId: `binding-${item.uuid}`,
-            instanceId:
-              item.instanceId || activeSceneModel.value?.instanceId || "",
-            objectUuid: item.uuid,
-            meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
-            objectName: item.name || "",
-            path: item.path || "",
-            businessBinding: {
-              nodeId: item.nodeId || "",
-              kks: item.kks || "",
-              tag: "",
-              bindingType: item.kks ? "device" : "custom"
-            },
-            properties: {
-              customName: item.name || "",
-              systemName: item.systemName || "",
-              status: item.status || "-",
-              type: item.type || ""
-            }
-          }))
+        objectBindings: serializedObjectBindings
       },
       anchors: anchors.value,
       cameras: cameraAnchors.value,
@@ -2072,34 +2101,13 @@ function buildProjectInfoPayload() {
         models: sceneModels.value,
         bindings: {
           ...(projectStore.projectPackage?.scene?.bindings || {}),
-          objectBindings: sceneDevices.value
-            .filter(item => item?.uuid)
-            .map(item => ({
-              bindingId: `binding-${item.uuid}`,
-              instanceId:
-                item.instanceId || activeSceneModel.value?.instanceId || "",
-              objectUuid: item.uuid,
-              meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
-              objectName: item.name || "",
-              path: item.path || "",
-              businessBinding: {
-                nodeId: item.nodeId || "",
-                kks: item.kks || "",
-                tag: "",
-                bindingType: item.kks ? "device" : "custom"
-              },
-              properties: {
-                customName: item.name || "",
-                systemName: item.systemName || "",
-                status: item.status || "-",
-                type: item.type || ""
-              }
-            }))
+          objectBindings: serializedObjectBindings
         },
         anchors: anchors.value,
         cameras: cameraAnchors.value,
         measurements: measurementRecords.value,
         schemes: sceneSchemes.value,
+        bookmarks: bookmarks.value,
         clipping: projectClippingState.value,
         clippingPresets: clippingPresets.value
       },
@@ -2148,6 +2156,18 @@ async function saveCurrentProject() {
     if (!success) {
       throw new Error(response?.message || "保存项目失败");
     }
+    currentProjectContext.value = project
+      ? {
+          ...project,
+          projectInfo: JSON.stringify(payload),
+          parsedProjectInfo: payload
+        }
+      : {
+          id: handoverProjectId.value,
+          projectName: handoverProjectName.value,
+          projectInfo: JSON.stringify(payload),
+          parsedProjectInfo: payload
+        };
     message("项目已保存", { type: "success" });
   } catch (error) {
     console.error("save current fullscreen project failed", error);
@@ -2202,13 +2222,21 @@ function createScopedProjectPackage(scope, rawPackage = null) {
   };
 }
 
-function resolvePersistedProjectPackage(projectInfo = null) {
-  if (projectInfo?.projectPackage) {
-    const backendPackage = createScopedProjectPackage(
-      currentSceneSchemeScope.value,
-      projectInfo.projectPackage
-    );
-    saveProjectPackage(currentSceneSchemeScope.value, backendPackage);
+function resolvePersistedProjectPackage(
+  projectInfo = null,
+  { preferProjectInfo = true, persistResolvedPackage = preferProjectInfo } = {}
+) {
+  const backendPackage = projectInfo?.projectPackage
+    ? createScopedProjectPackage(
+        currentSceneSchemeScope.value,
+        projectInfo.projectPackage
+      )
+    : null;
+
+  if (preferProjectInfo && backendPackage) {
+    if (persistResolvedPackage) {
+      saveProjectPackage(currentSceneSchemeScope.value, backendPackage);
+    }
     return backendPackage;
   }
 
@@ -2216,157 +2244,129 @@ function resolvePersistedProjectPackage(projectInfo = null) {
     currentSceneSchemeScope.value,
     getProjectMetadata()
   );
-  return currentPackage;
-}
-
-function applySavedRuntimeState(runtime = {}) {
-  const nextQuality =
-    runtime.quality === "low" ||
-    runtime.quality === "medium" ||
-    runtime.quality === "high"
-      ? runtime.quality
-      : "high";
-  quality.value = nextQuality;
-  runtimeStore.setQuality(nextQuality);
-
-  const nextTheme = String(runtime.materialTheme || materialTheme.value || "");
-  if (nextTheme) {
-    materialTheme.value = nextTheme;
-    runtimeStore.setMaterialTheme(nextTheme);
+  if (hasProjectPackageContent(currentPackage) || !backendPackage) {
+    return currentPackage;
   }
 
-  const nextTool = String(runtime.activeTool || activeTool.value || "rotate");
-  activeTool.value = nextTool;
-  runtimeStore.setActiveTool(nextTool);
-
-  const nextMeasurementMode = String(
-    runtime.measurementMode || measurementMode.value || "distance"
-  );
-  measurementMode.value = nextMeasurementMode;
-  runtimeStore.setMeasurementMode(nextMeasurementMode);
-
-  const nextDisplayMode = String(
-    runtime.displayMode || displayMode.value || ""
-  );
-  if (nextDisplayMode) {
-    displayMode.value = nextDisplayMode;
-    runtimeStore.setDisplayMode(nextDisplayMode);
+  if (persistResolvedPackage) {
+    saveProjectPackage(currentSceneSchemeScope.value, backendPackage);
   }
-
-  showStats.value = Boolean(runtime.showStats);
-  runtimeStore.setShowStats(showStats.value);
-  showSidePanel.value = runtime.showSidePanel !== false;
-  runtimeStore.setShowSidePanel(showSidePanel.value);
-  const nextSideTab = String(runtime.activeSideTab || "navigation");
-  activeSideTab.value =
-    nextSideTab === "structure" ? "navigation" : nextSideTab;
-  runtimeStore.setActiveSideTab(activeSideTab.value);
-
-  transparent.value = Boolean(runtime.transparentEnabled);
-  runtimeStore.setTransparentEnabled(transparent.value);
-  pointMarkersVisible.value = runtime.pointMarkersVisible !== false;
-  runtimeStore.setPointMarkersVisible(pointMarkersVisible.value);
-  anchorMarkersVisible.value = runtime.anchorMarkersVisible !== false;
-  runtimeStore.setAnchorMarkersVisible(anchorMarkersVisible.value);
-  cameraMarkersVisible.value = runtime.cameraMarkersVisible !== false;
-  runtimeStore.setCameraMarkersVisible(cameraMarkersVisible.value);
-
-  selectedDeviceUuid.value = String(runtime.selectedDeviceUuid || "");
-  runtimeStore.setSelectedDeviceUuid(selectedDeviceUuid.value);
-  selectedAnchorId.value = String(runtime.selectedAnchorId || "");
-  runtimeStore.setSelectedAnchorId(selectedAnchorId.value);
-  selectedCameraId.value = String(runtime.selectedCameraId || "");
-  runtimeStore.setSelectedCameraId(selectedCameraId.value);
-  selectedSystemNodeId.value = String(runtime.selectedSystemNodeId || "");
-  runtimeStore.setSelectedSystemNodeId(selectedSystemNodeId.value);
-  selectedQuickKks.value = String(runtime.selectedQuickKks || "");
-  runtimeStore.setSelectedQuickKks(selectedQuickKks.value);
-  currentNavNodeKey.value = String(runtime.currentNavNodeKey || "");
-  runtimeStore.setCurrentNavNodeKey(currentNavNodeKey.value);
+  return backendPackage;
 }
 
-function loadPersistedProjectState(projectInfo = null) {
-  const projectPackage = resolvePersistedProjectPackage(projectInfo);
-  const savedScene = projectInfo?.scene || {};
-  const savedRuntime = projectInfo?.runtime || {};
-  savedObjectBindings.value = Array.isArray(
-    savedScene.bindings?.objectBindings ||
-      projectPackage.scene?.bindings?.objectBindings
-  )
-    ? (
-        savedScene.bindings?.objectBindings ||
-        projectPackage.scene?.bindings?.objectBindings
-      )
-        .map(normalizeSavedObjectBinding)
-        .filter(Boolean)
-    : [];
-  systemNodeTree.value = mapSystemTreeNodes(
-    Array.isArray(savedScene.navigationTree)
-      ? savedScene.navigationTree
-      : projectPackage.scene?.navigationTree || []
-  );
-  updateSceneModelNodeLabels();
+function loadPersistedProjectState(
+  projectInfo = null,
+  { preferProjectInfo = true, persistResolvedPackage = preferProjectInfo } = {}
+) {
+  const projectPackage = resolvePersistedProjectPackage(projectInfo, {
+    preferProjectInfo,
+    persistResolvedPackage
+  });
+  const restoredState = resolveRestoredViewerProjectState({
+    projectInfo,
+    projectPackage,
+    preferProjectInfo,
+    normalizeSavedObjectBinding,
+    mapSystemTreeNodes,
+    buildStyledAnchorForm,
+    createDefaultClippingState,
+    normalizeClippingState,
+    currentRuntime: {
+      materialTheme: materialTheme.value,
+      activeTool: activeTool.value,
+      measurementMode: measurementMode.value,
+      displayMode: displayMode.value
+    }
+  });
 
-  projectStore.setProjectPackage(projectPackage);
-  anchorStyleDefaults.value = {
-    anchor:
-      savedScene.anchorStyleDefaults?.anchor ||
-      projectPackage.scene?.anchorStyleDefaults?.anchor ||
-      {},
-    camera:
-      savedScene.anchorStyleDefaults?.camera ||
-      projectPackage.scene?.anchorStyleDefaults?.camera ||
-      {}
-  };
-
-  anchors.value = (
-    Array.isArray(savedScene.anchors)
-      ? savedScene.anchors
-      : projectPackage.scene?.anchors || []
-  ).map(item => buildStyledAnchorForm("anchor", item));
-  cameraAnchors.value = (
-    Array.isArray(savedScene.cameras)
-      ? savedScene.cameras
-      : projectPackage.scene?.cameras || []
-  ).map(item => buildStyledAnchorForm("camera", item));
-  measurementRecords.value = Array.isArray(savedScene.measurements)
-    ? savedScene.measurements
-    : projectPackage.scene?.measurements || [];
-  sceneSchemes.value = Array.isArray(savedScene.schemes)
-    ? savedScene.schemes
-    : projectPackage.scene?.schemes || [];
-  bookmarks.value = Array.isArray(savedScene.bookmarks)
-    ? savedScene.bookmarks
-    : [];
-
-  projectStore.setAnchors(anchors.value);
-  projectStore.setCameraAnchors(cameraAnchors.value);
-  projectStore.setMeasurementRecords(measurementRecords.value);
-  projectStore.setSceneSchemes(sceneSchemes.value);
-  projectStore.setBookmarks(bookmarks.value);
-
-  const nextClippingState =
-    savedScene.clipping ||
-    projectPackage.scene?.clipping ||
-    createDefaultClippingState();
-  runtimeStore.setClippingState(normalizeClippingState(nextClippingState));
-  projectStore.setClippingState(nextClippingState);
-
-  const nextClippingPresets = Array.isArray(savedScene.clippingPresets)
-    ? savedScene.clippingPresets
-    : projectPackage.scene?.clippingPresets || [];
-  projectStore.setClippingPresets(nextClippingPresets);
-
-  assetGroups.value = (
-    Array.isArray(savedScene.assetGroups)
-      ? savedScene.assetGroups
-      : projectPackage.assets?.sceneManifest?.groups || []
-  ).map(item => ({
-    ...item,
-    visible: item.visible !== false
-  }));
-
-  applySavedRuntimeState(savedRuntime);
+  applyRestoredViewerProjectState({
+    restoredState,
+    projectPackage,
+    projectStore,
+    runtimeStore,
+    updateSceneModelNodeLabels,
+    setSavedObjectBindings: value => {
+      savedObjectBindings.value = value;
+    },
+    setSystemNodeTree: value => {
+      systemNodeTree.value = value;
+    },
+    setAnchorStyleDefaults: value => {
+      anchorStyleDefaults.value = value;
+    },
+    setAnchors: value => {
+      anchors.value = value;
+    },
+    setCameraAnchors: value => {
+      cameraAnchors.value = value;
+    },
+    setMeasurementRecords: value => {
+      measurementRecords.value = value;
+    },
+    setSceneSchemes: value => {
+      sceneSchemes.value = value;
+    },
+    setBookmarks: value => {
+      bookmarks.value = value;
+    },
+    setAssetGroups: value => {
+      assetGroups.value = value;
+    },
+    setQuality: value => {
+      quality.value = value;
+    },
+    setMaterialTheme: value => {
+      materialTheme.value = value;
+    },
+    setActiveTool: value => {
+      activeTool.value = value;
+    },
+    setMeasurementMode: value => {
+      measurementMode.value = value;
+    },
+    setDisplayMode: value => {
+      displayMode.value = value;
+    },
+    setShowStats: value => {
+      showStats.value = value;
+    },
+    setShowSidePanel: value => {
+      showSidePanel.value = value;
+    },
+    setActiveSideTab: value => {
+      activeSideTab.value = value;
+    },
+    setTransparent: value => {
+      transparent.value = value;
+    },
+    setPointMarkersVisible: value => {
+      pointMarkersVisible.value = value;
+    },
+    setAnchorMarkersVisible: value => {
+      anchorMarkersVisible.value = value;
+    },
+    setCameraMarkersVisible: value => {
+      cameraMarkersVisible.value = value;
+    },
+    setSelectedDeviceUuid: value => {
+      selectedDeviceUuid.value = value;
+    },
+    setSelectedAnchorId: value => {
+      selectedAnchorId.value = value;
+    },
+    setSelectedCameraId: value => {
+      selectedCameraId.value = value;
+    },
+    setSelectedSystemNodeId: value => {
+      selectedSystemNodeId.value = value;
+    },
+    setSelectedQuickKks: value => {
+      selectedQuickKks.value = value;
+    },
+    setCurrentNavNodeKey: value => {
+      currentNavNodeKey.value = value;
+    }
+  });
 }
 
 function applyAssetGroupVisibility() {
@@ -2391,20 +2391,36 @@ function toggleAssetGroupVisibility({ id, visible }) {
   assetGroups.value = assetGroups.value.map(item =>
     item.id === id ? { ...item, visible } : item
   );
-  const nextPackage = patchProjectPackage(
-    currentSceneSchemeScope.value,
-    {
-      assets: {
-        sceneManifest: {
-          ...sceneManifest.value,
-          groups: assetGroups.value
-        }
-      }
-    },
-    getProjectMetadata()
-  );
-  projectStore.setProjectPackage(nextPackage);
+  patchAssetsProjectPackage({
+    sceneManifest: {
+      ...sceneManifest.value,
+      groups: assetGroups.value
+    }
+  });
   applyAssetGroupVisibility();
+}
+
+function focusSceneObjectSelection(objectUuid) {
+  if (!objectUuid) return false;
+  viewerAdapter.selectObjectByUUID(objectUuid, { emitEvent: false });
+  viewerAdapter.focusObjectByUUID(objectUuid);
+  return true;
+}
+
+function updateSceneAnchorSelection(item, kind = "anchor") {
+  if (kind === "camera") {
+    runtimeStore.setSelectedCameraId(item?.id || "");
+    runtimeStore.setSelectedAnchorId("");
+    return;
+  }
+  runtimeStore.setSelectedAnchorId(item?.id || "");
+  runtimeStore.setSelectedCameraId("");
+}
+
+function clearSceneObjectPanels() {
+  runtimeStore.setShowObjectPanel(false);
+  runtimeStore.setSelectedObject(null);
+  viewerAdapter.clearSelection();
 }
 
 function applyLodLevel(lod) {
@@ -2618,44 +2634,24 @@ function removeSceneAnchor(item, kind = "anchor") {
 
 async function selectSceneAnchor(item, kind = "anchor") {
   if (!item) return;
-  if (kind === "camera") {
-    runtimeStore.setSelectedCameraId(item.id);
-    runtimeStore.setSelectedAnchorId("");
-  } else {
-    runtimeStore.setSelectedAnchorId(item.id);
-    runtimeStore.setSelectedCameraId("");
-  }
-  if (item.objectUuid) {
-    viewerAdapter.selectObjectByUUID(item.objectUuid, { emitEvent: false });
-    viewerAdapter.focusObjectByUUID(item.objectUuid);
+  updateSceneAnchorSelection(item, kind);
+  if (focusSceneObjectSelection(item.objectUuid)) {
     await selectTreeNodeByUUID(item.objectUuid, { openPanel: false });
   }
 }
 
 function openAnchorDetail(anchor) {
-  runtimeStore.setSelectedAnchorId(anchor.id);
-  runtimeStore.setSelectedCameraId("");
-  runtimeStore.setShowObjectPanel(false);
-  runtimeStore.setSelectedObject(null);
-  viewerAdapter.clearSelection();
+  updateSceneAnchorSelection(anchor, "anchor");
+  clearSceneObjectPanels();
   anchorDetailVisible.value = true;
-  if (anchor.objectUuid) {
-    viewerAdapter.selectObjectByUUID(anchor.objectUuid, { emitEvent: false });
-    viewerAdapter.focusObjectByUUID(anchor.objectUuid);
-  }
+  focusSceneObjectSelection(anchor.objectUuid);
 }
 
 function openCameraVideo(anchor) {
-  runtimeStore.setSelectedCameraId(anchor.id);
-  runtimeStore.setSelectedAnchorId("");
-  runtimeStore.setShowObjectPanel(false);
-  runtimeStore.setSelectedObject(null);
-  viewerAdapter.clearSelection();
+  updateSceneAnchorSelection(anchor, "camera");
+  clearSceneObjectPanels();
   runtimeStore.openVideoDialog(anchor);
-  if (anchor.objectUuid) {
-    viewerAdapter.selectObjectByUUID(anchor.objectUuid, { emitEvent: false });
-    viewerAdapter.focusObjectByUUID(anchor.objectUuid);
-  }
+  focusSceneObjectSelection(anchor.objectUuid);
 }
 
 function handleSceneAnchorClick(anchor) {
@@ -2849,11 +2845,8 @@ function syncMeasurementPoints() {
 }
 
 function persistMeasurementRecords() {
-  patchProjectPackage(currentSceneSchemeScope.value, {
-    metadata: getProjectMetadata(),
-    scene: {
-      measurements: measurementRecords.value
-    }
+  patchSceneProjectPackage({
+    measurements: measurementRecords.value
   });
 }
 
@@ -3300,341 +3293,209 @@ function onCtxRemoveNode() {
   removeNavigationNodeById(ctxMenuNode.value?.nodeId || "");
 }
 
-function normalizeNodeDocumentOption(item) {
-  const id = String(item?.id || "").trim();
-  if (!id) return null;
+function getDocumentDialogMeta(scope = documentDialogScope.value) {
+  if (scope === "object") {
+    return {
+      sourceKind: MODEL_OBJECT_SOURCE_KIND,
+      relationType: MODEL_OBJECT_DOC_RELATION_TYPE,
+      targetLabel: "当前构件",
+      successMessage: "构件文档绑定已保存",
+      errorMessage: "提交构件文档绑定失败"
+    };
+  }
   return {
-    id,
-    name: String(item?.name || item?.title || "").trim(),
-    type: String(item?.type || "").trim(),
-    size: Number(item?.size || 0),
-    folderId: String(item?.folderId || "").trim(),
-    updatedAt: String(item?.updatedAt || item?.uploadedAt || "").trim()
+    sourceKind: "node",
+    relationType: "node_doc",
+    targetLabel: "当前节点",
+    successMessage: "节点文件绑定已保存",
+    errorMessage: "提交节点文件绑定失败"
   };
 }
 
-function mergeSelectedNodeDocuments(current = [], next = [], replaceIds = []) {
-  const replaceIdSet = new Set(
-    replaceIds.map(item => String(item || "").trim()).filter(Boolean)
-  );
-  const mergedMap = new Map();
-  current.forEach(item => {
-    if (!replaceIdSet.has(item.id)) {
-      mergedMap.set(item.id, item);
-    }
-  });
-  next.forEach(item => {
-    mergedMap.set(item.id, item);
-  });
-  return Array.from(mergedMap.values());
-}
-
-function syncNodeDocumentTableSelection() {
-  const table = nodeDocumentTableRef.value;
-  if (!table) return;
-  const selectedIdSet = new Set(
-    nodeDocumentSelectedDocuments.value.map(item => item.id)
-  );
-  table.clearSelection();
-  nodeDocumentDialogRecords.value.forEach(row => {
-    if (selectedIdSet.has(row.id)) {
-      table.toggleRowSelection(row, true);
-    }
+function syncCurrentDocumentTableSelection() {
+  syncDocumentBindingTableSelection({
+    tableRef: documentDialogTableRef,
+    selectedDocuments: documentDialogSelectedDocuments.value,
+    records: documentDialogRecords.value
   });
 }
 
-async function fetchNodeBoundDocumentsFromBackend(nodeId) {
-  const targetId = String(nodeId || "").trim();
-  if (!targetId) return [];
-  const relations = await listRelationRecordsBySourceAndType({
-    sourceKind: "node",
-    sourceId: targetId,
-    type: "node_doc"
-  });
-  const relationRows = Array.isArray(relations?.data) ? relations.data : [];
-  const documentIds = Array.from(
-    new Set(
-      relationRows
-        .map(item => String(item?.targetId || "").trim())
-        .filter(Boolean)
-    )
-  );
-  return await fetchDocumentOptionsByIds(documentIds);
-}
-
-async function replaceNodeDocumentRelations(nodeId, documents = []) {
-  const targetId = String(nodeId || "").trim();
-  if (!targetId) return [];
-  const relations = await listRelationRecordsBySourceAndType({
-    sourceKind: "node",
-    sourceId: targetId,
-    type: "node_doc"
-  });
-  const currentRows = Array.isArray(relations?.data) ? relations.data : [];
-  const nextDocs = normalizeNodeBoundDocuments(documents);
-  const nextDocIdSet = new Set(nextDocs.map(item => item.id));
-
-  await Promise.all(
-    currentRows
-      .filter(item => !nextDocIdSet.has(String(item?.targetId || "").trim()))
-      .map(item => String(item?.id || "").trim())
-      .filter(Boolean)
-      .map(id => deleteRelationRecord(id))
-  );
-
-  const currentDocIdSet = new Set(
-    currentRows.map(item => String(item?.targetId || "").trim()).filter(Boolean)
-  );
-
-  for (const doc of nextDocs) {
-    if (currentDocIdSet.has(doc.id)) continue;
-    await createRelationRecord({
-      type: "node_doc",
-      sourceKind: "node",
-      sourceId: targetId,
-      targetKind: "doc",
-      targetId: doc.id
-    });
-  }
-
-  return nextDocs;
-}
-
-async function loadNodeDocumentOptions(keyword = "") {
-  nodeDocumentDialogLoading.value = true;
+async function loadCurrentDocumentOptions(keyword = "") {
+  documentDialogLoading.value = true;
   try {
-    const data = unwrapApiData(
-      await getHandoverDocumentList({
-        searchMode: "fuzzy",
-        keyword: keyword.trim() || undefined,
-        recycleBin: false,
-        page: nodeDocumentDialogPagination.value.page,
-        size: nodeDocumentDialogPagination.value.size
-      }),
-      "加载文档列表失败"
-    );
-    const records = Array.isArray(data?.records) ? data.records : [];
-    nodeDocumentDialogRecords.value = records
-      .map(normalizeNodeDocumentOption)
-      .filter(Boolean);
-    nodeDocumentDialogPagination.value.total = Number(data?.total ?? 0);
-    nodeDocumentDialogPagination.value.page = Number(
-      data?.page ?? nodeDocumentDialogPagination.value.page
-    );
-    nodeDocumentDialogPagination.value.size = Number(
-      data?.size ?? nodeDocumentDialogPagination.value.size
-    );
+    const { records, pagination } = await loadDocumentBindingOptions({
+      keyword,
+      pagination: documentDialogPagination.value,
+      getDocumentList: getHandoverDocumentList,
+      unwrapApiData
+    });
+    documentDialogRecords.value = records;
+    documentDialogPagination.value = pagination;
     await nextTick();
-    syncNodeDocumentTableSelection();
+    syncCurrentDocumentTableSelection();
   } catch (error) {
-    nodeDocumentDialogRecords.value = [];
-    nodeDocumentDialogPagination.value.total = 0;
+    documentDialogRecords.value = [];
+    documentDialogPagination.value.total = 0;
     message(error?.message || "加载文档列表失败", { type: "error" });
   } finally {
-    nodeDocumentDialogLoading.value = false;
+    documentDialogLoading.value = false;
   }
 }
 
-async function openNodeDocumentDialog(mode = "bind") {
+async function fetchDialogBoundDocuments() {
+  const meta = getDocumentDialogMeta();
+  if (!documentDialogSourceId.value) return [];
+  return fetchBoundDocumentsByRelation({
+    sourceKind: meta.sourceKind,
+    sourceId: documentDialogSourceId.value,
+    relationType: meta.relationType,
+    listRelationRecordsBySourceAndType,
+    fetchDocumentOptionsByIds
+  });
+}
+
+function applyFetchedDialogDocuments(items = []) {
+  const documents = normalizeNodeBoundDocuments(items);
+  documentDialogSelectedDocuments.value = documents;
+  if (documentDialogScope.value === "node") {
+    updateNavigationNodeBoundDocuments(documentDialogTargetId.value, documents);
+    return;
+  }
+  applySceneDeviceBindingPatch(documentDialogSourceId.value, {
+    sourceId: documentDialogSourceId.value,
+    boundDocuments: documents
+  });
+}
+
+async function openDocumentDialog({
+  scope = "node",
+  mode = "bind",
+  targetId = "",
+  targetLabel = "",
+  sourceId = "",
+  initialDocuments = []
+} = {}) {
+  if (!targetId || !sourceId) return;
+  documentDialogScope.value = scope;
+  documentDialogMode.value = mode;
+  documentDialogTargetId.value = String(targetId || "").trim();
+  documentDialogTargetLabel.value = String(
+    targetLabel || getDocumentDialogMeta(scope).targetLabel
+  ).trim();
+  documentDialogSourceId.value = String(sourceId || "").trim();
+  documentDialogKeyword.value = "";
+  documentDialogPagination.value = createDefaultDocumentBindingPagination();
+  documentDialogSelectedDocuments.value =
+    normalizeNodeBoundDocuments(initialDocuments);
+  documentDialogVisible.value = true;
+  ctxMenuVisible.value = false;
+
+  try {
+    const boundDocuments = await fetchDialogBoundDocuments();
+    applyFetchedDialogDocuments(boundDocuments);
+  } catch (error) {
+    message(error?.message || "加载绑定文件失败", { type: "error" });
+  }
+
+  if (mode === "bind") {
+    documentDialogRecords.value = [];
+    void loadCurrentDocumentOptions();
+  }
+}
+
+function onCtxBindDocuments() {
   const targetId = String(
     ctxMenuNode.value?.nodeId || ctxMenuNode.value?.id || ""
   ).trim();
   if (!targetId) return;
   const targetNode = findNavigationNodeById(systemNodeTree.value, targetId);
-  nodeDocumentDialogMode.value = mode;
-  nodeDocumentTargetId.value = targetId;
-  nodeDocumentTargetLabel.value = String(
-    targetNode?.label ||
-      ctxMenuNode.value?.label ||
-      ctxMenuNode.value?.name ||
-      "当前节点"
-  ).trim();
-  nodeDocumentDialogKeyword.value = "";
-  nodeDocumentDialogPagination.value.page = 1;
-  nodeDocumentSelectedDocuments.value =
-    getNavigationNodeBoundDocuments(targetId);
-  nodeDocumentDialogVisible.value = true;
-  ctxMenuVisible.value = false;
-
-  try {
-    const boundDocuments = await fetchNodeBoundDocumentsFromBackend(targetId);
-    nodeDocumentSelectedDocuments.value = boundDocuments;
-    updateNavigationNodeBoundDocuments(targetId, boundDocuments);
-  } catch (error) {
-    message(error?.message || "加载节点绑定文件失败", { type: "error" });
-  }
-
-  if (mode === "bind") {
-    nodeDocumentDialogRecords.value = [];
-    loadNodeDocumentOptions();
-  }
-}
-
-function onCtxBindDocuments() {
-  void openNodeDocumentDialog("bind");
-}
-
-function onCtxViewDocuments() {
-  void openNodeDocumentDialog("view");
-}
-
-function handleNodeDocumentSelectionChange(selection = []) {
-  const normalizedSelection = selection
-    .map(normalizeNodeDocumentOption)
-    .filter(Boolean);
-  const currentPageIds = nodeDocumentDialogRecords.value.map(item => item.id);
-  nodeDocumentSelectedDocuments.value = mergeSelectedNodeDocuments(
-    nodeDocumentSelectedDocuments.value,
-    normalizedSelection,
-    currentPageIds
-  );
-}
-
-async function searchNodeDocuments(keyword) {
-  nodeDocumentDialogKeyword.value = String(keyword || "");
-  nodeDocumentDialogPagination.value.page = 1;
-  await loadNodeDocumentOptions(nodeDocumentDialogKeyword.value);
-}
-
-async function onNodeDocumentPageChange(page) {
-  nodeDocumentDialogPagination.value.page = Math.max(1, page);
-  await loadNodeDocumentOptions(nodeDocumentDialogKeyword.value);
-}
-
-async function onNodeDocumentSizeChange(size) {
-  nodeDocumentDialogPagination.value.size = size;
-  nodeDocumentDialogPagination.value.page = 1;
-  await loadNodeDocumentOptions(nodeDocumentDialogKeyword.value);
-}
-
-async function confirmNodeDocumentDialog() {
-  if (!nodeDocumentTargetId.value) return;
-  try {
-    const nextDocuments = await replaceNodeDocumentRelations(
-      nodeDocumentTargetId.value,
-      nodeDocumentSelectedDocuments.value
-    );
-    updateNavigationNodeBoundDocuments(
-      nodeDocumentTargetId.value,
-      nextDocuments
-    );
-    nodeDocumentDialogVisible.value = false;
-    message("节点文件绑定已保存", { type: "success" });
-  } catch (error) {
-    message(error?.message || "提交节点文件绑定失败", { type: "error" });
-  }
-}
-
-function syncObjectDocumentTableSelection() {
-  const table = objectDocumentTableRef.value;
-  if (!table) return;
-  const selectedIdSet = new Set(
-    objectDocumentSelectedDocuments.value.map(item => item.id)
-  );
-  table.clearSelection();
-  objectDocumentDialogRecords.value.forEach(row => {
-    if (selectedIdSet.has(row.id)) {
-      table.toggleRowSelection(row, true);
-    }
+  void openDocumentDialog({
+    scope: "node",
+    mode: "bind",
+    targetId,
+    targetLabel:
+      targetNode?.label || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
+    sourceId: targetId,
+    initialDocuments: getNavigationNodeBoundDocuments(targetId)
   });
 }
 
-async function loadObjectDocumentOptions(keyword = "") {
-  objectDocumentDialogLoading.value = true;
-  try {
-    const data = unwrapApiData(
-      await getHandoverDocumentList({
-        searchMode: "fuzzy",
-        keyword: keyword.trim() || undefined,
-        recycleBin: false,
-        page: objectDocumentDialogPagination.value.page,
-        size: objectDocumentDialogPagination.value.size
-      }),
-      "加载文档列表失败"
-    );
-    const records = Array.isArray(data?.records) ? data.records : [];
-    objectDocumentDialogRecords.value = records
-      .map(normalizeNodeDocumentOption)
-      .filter(Boolean);
-    objectDocumentDialogPagination.value.total = Number(data?.total ?? 0);
-    objectDocumentDialogPagination.value.page = Number(
-      data?.page ?? objectDocumentDialogPagination.value.page
-    );
-    objectDocumentDialogPagination.value.size = Number(
-      data?.size ?? objectDocumentDialogPagination.value.size
-    );
-    await nextTick();
-    syncObjectDocumentTableSelection();
-  } catch (error) {
-    objectDocumentDialogRecords.value = [];
-    objectDocumentDialogPagination.value.total = 0;
-    message(error?.message || "加载文档列表失败", { type: "error" });
-  } finally {
-    objectDocumentDialogLoading.value = false;
-  }
-}
-
-function openObjectDocumentDialog(mode = "bind") {
-  const raw = ctxMenuNode.value?.raw || null;
-  const targetUuid = String(raw?.uuid || "").trim();
-  if (!targetUuid) return;
-  objectDocumentDialogMode.value = mode;
-  objectDocumentTargetUuid.value = targetUuid;
-  objectDocumentTargetLabel.value = String(
-    raw?.name ||
-      ctxMenuNode.value?.label ||
-      ctxMenuNode.value?.name ||
-      "当前构件"
+function onCtxViewDocuments() {
+  const targetId = String(
+    ctxMenuNode.value?.nodeId || ctxMenuNode.value?.id || ""
   ).trim();
-  objectDocumentDialogKeyword.value = "";
-  objectDocumentDialogPagination.value.page = 1;
-  objectDocumentSelectedDocuments.value = normalizeNodeBoundDocuments(
-    raw?.boundDocuments || []
-  );
-  objectDocumentDialogVisible.value = true;
-  ctxMenuVisible.value = false;
-
-  if (mode === "bind") {
-    objectDocumentDialogRecords.value = [];
-    loadObjectDocumentOptions();
-  }
+  if (!targetId) return;
+  const targetNode = findNavigationNodeById(systemNodeTree.value, targetId);
+  void openDocumentDialog({
+    scope: "node",
+    mode: "view",
+    targetId,
+    targetLabel:
+      targetNode?.label || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
+    sourceId: targetId,
+    initialDocuments: getNavigationNodeBoundDocuments(targetId)
+  });
 }
 
 function onCtxBindObjectDocuments() {
-  openObjectDocumentDialog("bind");
+  const raw = ctxMenuNode.value?.raw || null;
+  const targetUuid = String(raw?.uuid || "").trim();
+  const sourceId = getSceneDeviceSourceId(raw);
+  if (!targetUuid || !sourceId) return;
+  void openDocumentDialog({
+    scope: "object",
+    mode: "bind",
+    targetId: targetUuid,
+    targetLabel:
+      raw?.name || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
+    sourceId,
+    initialDocuments: raw?.boundDocuments || []
+  });
 }
 
 function onCtxViewObjectDocuments() {
-  openObjectDocumentDialog("view");
+  const raw = ctxMenuNode.value?.raw || null;
+  const targetUuid = String(raw?.uuid || "").trim();
+  const sourceId = getSceneDeviceSourceId(raw);
+  if (!targetUuid || !sourceId) return;
+  void openDocumentDialog({
+    scope: "object",
+    mode: "view",
+    targetId: targetUuid,
+    targetLabel:
+      raw?.name || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
+    sourceId,
+    initialDocuments: raw?.boundDocuments || []
+  });
 }
 
-function handleObjectDocumentSelectionChange(selection = []) {
+function handleDocumentSelectionChange(selection = []) {
   const normalizedSelection = selection
-    .map(normalizeNodeDocumentOption)
+    .map(normalizeDocumentBindingOption)
     .filter(Boolean);
-  const currentPageIds = objectDocumentDialogRecords.value.map(item => item.id);
-  objectDocumentSelectedDocuments.value = mergeSelectedNodeDocuments(
-    objectDocumentSelectedDocuments.value,
+  const currentPageIds = documentDialogRecords.value.map(item => item.id);
+  documentDialogSelectedDocuments.value = mergeSelectedDocumentBindings(
+    documentDialogSelectedDocuments.value,
     normalizedSelection,
     currentPageIds
   );
 }
 
-async function searchObjectDocuments(keyword) {
-  objectDocumentDialogKeyword.value = String(keyword || "");
-  objectDocumentDialogPagination.value.page = 1;
-  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
+async function searchDocumentOptions(keyword) {
+  documentDialogKeyword.value = String(keyword || "");
+  documentDialogPagination.value.page = 1;
+  await loadCurrentDocumentOptions(documentDialogKeyword.value);
 }
 
-async function onObjectDocumentPageChange(page) {
-  objectDocumentDialogPagination.value.page = Math.max(1, page);
-  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
+async function onDocumentPageChange(page) {
+  documentDialogPagination.value.page = Math.max(1, page);
+  await loadCurrentDocumentOptions(documentDialogKeyword.value);
 }
 
-async function onObjectDocumentSizeChange(size) {
-  objectDocumentDialogPagination.value.size = size;
-  objectDocumentDialogPagination.value.page = 1;
-  await loadObjectDocumentOptions(objectDocumentDialogKeyword.value);
+async function onDocumentSizeChange(size) {
+  documentDialogPagination.value.size = size;
+  documentDialogPagination.value.page = 1;
+  await loadCurrentDocumentOptions(documentDialogKeyword.value);
 }
 
 const propDialogVisible = ref(false);
@@ -3757,12 +3618,25 @@ const currentPropertyTargetName = computed(() => {
   ).trim();
 });
 
-const nodeDocumentDialogTitle = computed(() => {
-  return nodeDocumentDialogMode.value === "view" ? "查看绑定文件" : "绑定文件";
+const documentDialogTitle = computed(() => {
+  const scopeLabel = documentDialogScope.value === "object" ? "构件" : "节点";
+  return documentDialogMode.value === "view"
+    ? `查看${scopeLabel}绑定文件`
+    : `绑定${scopeLabel}文件`;
 });
 
-const currentNodeBoundDocumentCount = computed(
-  () => nodeDocumentSelectedDocuments.value.length
+const currentDocumentBoundCount = computed(
+  () => documentDialogSelectedDocuments.value.length
+);
+
+const documentDialogCurrentLabel = computed(() =>
+  documentDialogScope.value === "object" ? "当前构件" : "当前节点"
+);
+
+const documentDialogEmptyText = computed(() =>
+  documentDialogScope.value === "object"
+    ? "当前构件尚未绑定文档"
+    : "当前节点尚未绑定文档"
 );
 
 async function openPropertyDialog(mode) {
@@ -3922,64 +3796,32 @@ async function upsertSceneObjectKksRelation({
     });
   } else {
     await createRelationRecord(payload);
-    const refreshed = await listModelObjectRelationsBySourceAndType(
-      sourceId,
-      MODEL_OBJECT_KKS_RELATION_TYPE
-    );
-    primaryRelationId = String(refreshed[0]?.id || "").trim();
   }
 
+  const refreshedRelations = await listModelObjectRelationsBySourceAndType(
+    sourceId,
+    MODEL_OBJECT_KKS_RELATION_TYPE
+  );
+  const primaryRelation =
+    refreshedRelations.find(
+      item => String(item?.id || "").trim() === primaryRelationId
+    ) ||
+    refreshedRelations.find(
+      item => String(item?.targetId || "").trim() === normalizedKks
+    ) ||
+    refreshedRelations[0] ||
+    null;
+  primaryRelationId = String(primaryRelation?.id || "").trim();
+
   await Promise.all(
-    currentRelations
-      .slice(primaryRelationId ? 1 : 0)
+    refreshedRelations
+      .filter(item => String(item?.id || "").trim() !== primaryRelationId)
       .map(item => String(item?.id || "").trim())
       .filter(Boolean)
       .map(id => deleteRelationRecord(id))
   );
 
   return primaryRelationId;
-}
-
-async function replaceSceneObjectDocumentRelations({
-  sourceId,
-  documents = []
-}) {
-  const currentRelations = await listModelObjectRelationsBySourceAndType(
-    sourceId,
-    MODEL_OBJECT_DOC_RELATION_TYPE
-  );
-  const currentMap = new Map(
-    currentRelations.map(item => [String(item?.targetId || "").trim(), item])
-  );
-  const nextDocs = normalizeNodeBoundDocuments(documents);
-  const nextIdSet = new Set(nextDocs.map(item => item.id));
-
-  await Promise.all(
-    currentRelations
-      .filter(item => !nextIdSet.has(String(item?.targetId || "").trim()))
-      .map(item => String(item?.id || "").trim())
-      .filter(Boolean)
-      .map(id => deleteRelationRecord(id))
-  );
-
-  for (const doc of nextDocs) {
-    if (currentMap.has(doc.id)) continue;
-    await createRelationRecord({
-      type: MODEL_OBJECT_DOC_RELATION_TYPE,
-      sourceKind: MODEL_OBJECT_SOURCE_KIND,
-      sourceId,
-      targetKind: "doc",
-      targetId: doc.id
-    });
-  }
-
-  const refreshedRelations = await listModelObjectRelationsBySourceAndType(
-    sourceId,
-    MODEL_OBJECT_DOC_RELATION_TYPE
-  );
-  return refreshedRelations
-    .map(item => String(item?.id || "").trim())
-    .filter(Boolean);
 }
 
 async function confirmPropDialog() {
@@ -4026,35 +3868,39 @@ async function confirmPropDialog() {
   propDialogVisible.value = false;
 }
 
-async function confirmObjectDocumentDialog() {
-  const raw = ctxMenuNode.value?.raw || null;
-  const sourceId =
-    getSceneDeviceSourceId(raw) ||
-    buildModelObjectSourceId({
-      instanceId: selectedSceneDevice.value?.instanceId,
-      objectUuid: objectDocumentTargetUuid.value
-    });
-  if (!sourceId) {
-    message("当前构件缺少绑定标识，无法提交后端", { type: "error" });
-    return;
-  }
+async function confirmDocumentDialog() {
+  const meta = getDocumentDialogMeta();
+  if (!documentDialogTargetId.value || !documentDialogSourceId.value) return;
   try {
-    const relationIds = await replaceSceneObjectDocumentRelations({
-      sourceId,
-      documents: objectDocumentSelectedDocuments.value
+    const { documents, relationIds } = await replaceDocumentRelations({
+      sourceKind: meta.sourceKind,
+      sourceId: documentDialogSourceId.value,
+      relationType: meta.relationType,
+      documents: documentDialogSelectedDocuments.value,
+      listRelationRecordsBySourceAndType,
+      deleteRelationRecord,
+      createRelationRecord,
+      normalizeDocuments: normalizeNodeBoundDocuments
     });
-    applySceneDeviceBindingPatch(sourceId, {
-      sourceId,
-      boundDocuments: normalizeNodeBoundDocuments(
-        objectDocumentSelectedDocuments.value
-      ),
-      documentRelationIds: relationIds
-    });
-    syncSavedObjectBindingsFromSceneDevices();
-    objectDocumentDialogVisible.value = false;
-    message("构件文档绑定已保存", { type: "success" });
+
+    if (documentDialogScope.value === "object") {
+      applySceneDeviceBindingPatch(documentDialogSourceId.value, {
+        sourceId: documentDialogSourceId.value,
+        boundDocuments: documents,
+        documentRelationIds: relationIds
+      });
+      syncSavedObjectBindingsFromSceneDevices();
+    } else {
+      updateNavigationNodeBoundDocuments(
+        documentDialogTargetId.value,
+        documents
+      );
+    }
+
+    documentDialogVisible.value = false;
+    message(meta.successMessage, { type: "success" });
   } catch (error) {
-    message(error?.message || "提交构件文档绑定失败", { type: "error" });
+    message(error?.message || meta.errorMessage, { type: "error" });
   }
 }
 
@@ -4239,37 +4085,26 @@ async function selectTreeNodeByUUID(uuid, { openPanel = true } = {}) {
 }
 
 function handleViewerLoaded() {
-  runtimeStore.setViewerReady(true);
-  nextTick(() => {
-    viewerAdapter.resetView?.();
+  handleViewerLoadedLifecycle({
+    runtimeStore,
+    viewerAdapter,
+    refreshSceneTree,
+    refreshSceneDevices,
+    syncSceneObjectRelationsFromBackend,
+    syncRoamingState,
+    syncMeasurementPoints,
+    syncMeasurementRecordsToViewer,
+    syncSceneAnchors,
+    applyAssetGroupVisibility,
+    syncLayerTreeSelection,
+    quality: quality.value,
+    materialTheme: materialTheme.value,
+    runtimeClippingState: runtimeClippingState.value,
+    clippingAnimationSpeed: clippingAnimationSpeed.value,
+    clippingAnimationMode: clippingAnimationMode.value,
+    clippingAnimationAxis: clippingAnimationAxis.value,
+    syncRuntimeServices
   });
-  refreshSceneTree();
-  refreshSceneDevices();
-  void syncSceneObjectRelationsFromBackend();
-  syncRoamingState();
-  syncMeasurementPoints();
-  syncMeasurementRecordsToViewer();
-  syncSceneAnchors();
-  applyAssetGroupVisibility();
-  syncLayerTreeSelection();
-  viewerAdapter.setQuality(quality.value);
-  viewerAdapter.setMaterialTheme(materialTheme.value);
-  viewerAdapter.setClippingState(runtimeClippingState.value);
-  viewerAdapter.setClippingAnimationOptions?.({
-    speed: clippingAnimationSpeed.value,
-    mode: clippingAnimationMode.value,
-    axis: clippingAnimationAxis.value
-  });
-  runtimeStore.setClippingStats(
-    viewerAdapter.getClippingStats?.() || {
-      enabled: runtimeClippingState.value.enabled,
-      mode: runtimeClippingState.value.mode,
-      activePlaneCount: 0,
-      affectedMeshCount: 0,
-      totalMeshCount: 0
-    }
-  );
-  syncRuntimeServices();
 }
 
 function handleViewerClippingChange(payload) {
@@ -4297,36 +4132,22 @@ onMounted(async () => {
     }
   };
   window.addEventListener("keydown", onFullscreenKeydown);
-  const project = await loadHandoverProjectContext();
   await loadAvailableModels();
-  await initializeSceneModels(project?.parsedProjectInfo);
+  await reloadProjectSceneContext();
   refreshSceneTree();
-  loadPersistedProjectState(project?.parsedProjectInfo);
 });
 
 watch(
   () => handoverProjectId.value,
   async () => {
-    const project = await loadHandoverProjectContext();
-    await initializeSceneModels(project?.parsedProjectInfo);
-    loadPersistedProjectState(project?.parsedProjectInfo);
+    await reloadProjectSceneContext();
   }
 );
 
 watch(
   () => routeModelId.value,
-  async value => {
-    if (sceneModels.value.length > 0) return;
-    if (!value) {
-      activeSceneModelId.value = "";
-      syncActiveModelDetail();
-      return;
-    }
-    const detail = await fetchModelDetail(value);
-    if (!detail) return;
-    sceneModels.value = [createSceneModel(detail)];
-    activeSceneModelId.value = detail.id;
-    syncActiveModelDetail();
+  async modelId => {
+    await initializeRouteSceneModel(modelId);
   }
 );
 
@@ -4340,70 +4161,116 @@ watch(
 watch(
   () => modelUrl.value,
   () => {
-    stopClippingAnimation({ persist: false });
-    if (clippingPersistTimer) {
-      clearTimeout(clippingPersistTimer);
-      clippingPersistTimer = null;
-    }
-    stopRuntimeServices();
-    runtimeStore.setViewerReady(false);
-    selectedTreeNode.value = null;
-    treeFilterText.value = "";
-    sceneTree.value = null;
-    sceneDevices.value = [];
-    anchors.value = [];
-    cameraAnchors.value = [];
-    measurementRecords.value = [];
-    projectStore.setAnchors([]);
-    projectStore.setCameraAnchors([]);
-    projectStore.clearMeasurementRecords();
-    selectedDeviceUuid.value = "";
-    selectedAnchorId.value = "";
-    selectedCameraId.value = "";
-    selectedSystemNodeId.value = "";
-    selectedQuickKks.value = "";
-    displayMode.value = "all";
-    currentNavNodeKey.value = "";
-    layerCheckedKeys.value = [];
-    runtimeStore.setSelectedObject(null);
-    showObjectPanel.value = false;
-    anchorDetailVisible.value = false;
-    runtimeStore.closeVideoDialog();
-    viewerAdapter.toggleFirstPerson(false);
-    roamingEnabled.value = false;
-    viewerAdapter.clearIsolation();
-    viewerAdapter.clearLinkedPoints();
-    viewerAdapter.clearAnchors();
-    viewerAdapter.clearCameraAnchors();
-    viewerAdapter.clearMeasurements();
-    viewerAdapter.filterVisibleUUIDs(null);
-    runtimeStore.setClippingState(createDefaultClippingState());
-    projectStore.setClippingState(createDefaultClippingState());
-    runtimeStore.setClippingStats({
-      enabled: false,
-      mode: "single-plane",
-      activePlaneCount: 0,
-      affectedMeshCount: 0,
-      totalMeshCount: 0
+    resetViewerSceneOnModelChange({
+      stopClippingAnimation,
+      clearClippingPersistTimer: () => {
+        if (clippingPersistTimer) {
+          clearTimeout(clippingPersistTimer);
+          clippingPersistTimer = null;
+        }
+      },
+      stopRuntimeServices,
+      runtimeStore,
+      projectStore,
+      viewerAdapter,
+      setSelectedTreeNode: value => {
+        selectedTreeNode.value = value;
+      },
+      setTreeFilterText: value => {
+        treeFilterText.value = value;
+      },
+      setSceneTree: value => {
+        sceneTree.value = value;
+      },
+      setSceneDevices: value => {
+        sceneDevices.value = value;
+      },
+      setAnchors: value => {
+        anchors.value = value;
+      },
+      setCameraAnchors: value => {
+        cameraAnchors.value = value;
+      },
+      setMeasurementRecords: value => {
+        measurementRecords.value = value;
+      },
+      setSelectedDeviceUuid: value => {
+        selectedDeviceUuid.value = value;
+      },
+      setSelectedAnchorId: value => {
+        selectedAnchorId.value = value;
+      },
+      setSelectedCameraId: value => {
+        selectedCameraId.value = value;
+      },
+      setSelectedSystemNodeId: value => {
+        selectedSystemNodeId.value = value;
+      },
+      setSelectedQuickKks: value => {
+        selectedQuickKks.value = value;
+      },
+      setDisplayMode: value => {
+        displayMode.value = value;
+      },
+      setCurrentNavNodeKey: value => {
+        currentNavNodeKey.value = value;
+      },
+      setLayerCheckedKeys: value => {
+        layerCheckedKeys.value = value;
+      },
+      setShowObjectPanel: value => {
+        showObjectPanel.value = value;
+      },
+      setAnchorDetailVisible: value => {
+        anchorDetailVisible.value = value;
+      },
+      setRoamingEnabled: value => {
+        roamingEnabled.value = value;
+      },
+      setSelectedLodId: value => {
+        selectedLodId.value = value;
+      },
+      resetClippingState: () => {
+        runtimeStore.setClippingState(createDefaultClippingState());
+        projectStore.setClippingState(createDefaultClippingState());
+        runtimeStore.setClippingStats({
+          enabled: false,
+          mode: "single-plane",
+          activePlaneCount: 0,
+          affectedMeshCount: 0,
+          totalMeshCount: 0
+        });
+      },
+      refreshSceneTree,
+      restorePersistedProjectState: () => {
+        loadPersistedProjectState(
+          currentProjectContext.value?.parsedProjectInfo,
+          {
+            preferProjectInfo: false,
+            persistResolvedPackage: false
+          }
+        );
+      }
     });
-    projectStore.setClippingPresets([]);
-    selectedLodId.value = "";
-    refreshSceneTree();
-    loadPersistedProjectState(currentProjectContext.value?.parsedProjectInfo);
   }
 );
 
 watch(
   () => [selectedDeviceUuid.value, pointMarkersVisible.value],
   () => {
-    syncMeasurementPoints();
+    syncMeasurementPointsOnWatcher({
+      syncMeasurementPoints
+    });
   }
 );
 
 watch(
   () => measurementMode.value,
   value => {
-    setMeasurementMode(value);
+    syncMeasurementModeOnWatcher({
+      value,
+      setMeasurementMode
+    });
   },
   { immediate: true }
 );
@@ -4411,43 +4278,55 @@ watch(
 watch(
   () => videoDialogVisible.value,
   async value => {
-    if (value) {
-      await nextTick();
-      mountActiveVideo();
-      return;
-    }
-    videoAdapter.destroy();
-    videoErrorText.value = "";
+    await handleVideoDialogVisibilityChange({
+      visible: value,
+      nextTick,
+      mountActiveVideo,
+      videoAdapter,
+      clearVideoError: () => {
+        videoErrorText.value = "";
+      }
+    });
   }
 );
 
 watch(
   () => activeCameraDetail.value?.id,
   async () => {
-    if (!videoDialogVisible.value) return;
-    await nextTick();
-    mountActiveVideo();
+    await handleActiveCameraChange({
+      videoDialogVisible: videoDialogVisible.value,
+      nextTick,
+      mountActiveVideo
+    });
   }
 );
 
 watch(
   () => quality.value,
   value => {
-    viewerAdapter.setQuality(value);
+    syncViewerQuality({
+      viewerAdapter,
+      value
+    });
   }
 );
 
 watch(
   () => materialTheme.value,
   value => {
-    viewerAdapter.setMaterialTheme(value);
+    syncViewerMaterialTheme({
+      viewerAdapter,
+      value
+    });
   }
 );
 
 watch(
   () => [renderableAnchors.value, anchorMarkersVisible.value],
   () => {
-    syncSceneAnchors();
+    syncSceneAnchorsOnWatcher({
+      syncSceneAnchors
+    });
   },
   { deep: true }
 );
@@ -4455,7 +4334,9 @@ watch(
 watch(
   () => [renderableCameraAnchors.value, cameraMarkersVisible.value],
   () => {
-    syncSceneAnchors();
+    syncSceneAnchorsOnWatcher({
+      syncSceneAnchors
+    });
   },
   { deep: true }
 );
@@ -4463,15 +4344,14 @@ watch(
 watch(
   () => sceneManifest.value?.groups,
   value => {
-    assetGroups.value = Array.isArray(value)
-      ? value.map(item => ({
-          ...item,
-          visible: item.visible !== false
-        }))
-      : [];
-    if (viewerAdapter.isReady()) {
-      applyAssetGroupVisibility();
-    }
+    syncAssetGroupsFromManifest({
+      groups: value,
+      viewerAdapter,
+      applyAssetGroupVisibility,
+      setAssetGroups: nextGroups => {
+        assetGroups.value = nextGroups;
+      }
+    });
   },
   { deep: true, immediate: true }
 );
@@ -4479,8 +4359,10 @@ watch(
 watch(
   () => scriptDefinitions.value,
   () => {
-    if (!viewerAdapter.isReady()) return;
-    syncRuntimeServices();
+    syncRuntimeServicesIfReady({
+      viewerAdapter,
+      syncRuntimeServices
+    });
   },
   { deep: true }
 );
@@ -4488,8 +4370,10 @@ watch(
 watch(
   () => integrationConfigs.value,
   () => {
-    if (!viewerAdapter.isReady()) return;
-    syncRuntimeServices();
+    syncRuntimeServicesIfReady({
+      viewerAdapter,
+      syncRuntimeServices
+    });
   },
   { deep: true }
 );
@@ -4501,8 +4385,8 @@ watch(
     clippingAnimationAxis.value
   ],
   ([speed, mode, axis]) => {
-    if (!viewerAdapter.isReady()) return;
-    viewerAdapter.setClippingAnimationOptions?.({
+    syncViewerClippingAnimationOptions({
+      viewerAdapter,
       speed,
       mode,
       axis
@@ -4569,7 +4453,11 @@ onBeforeUnmount(() => {
 
         <div v-show="showSidePanel" class="dd-side-panel">
           <el-card shadow="never" class="h-full body-no-padding">
-            <el-tabs v-model="activeSideTab" tab-position="right" class="dd-side-tabs h-full">
+            <el-tabs
+              v-model="activeSideTab"
+              tab-position="right"
+              class="dd-side-tabs h-full"
+            >
               <el-tab-pane label="导航" name="navigation">
                 <NavigationPanel
                   ref="layerTreeRef"
@@ -4916,41 +4804,41 @@ onBeforeUnmount(() => {
         </el-dialog>
 
         <el-dialog
-          v-model="nodeDocumentDialogVisible"
-          :title="nodeDocumentDialogTitle"
+          v-model="documentDialogVisible"
+          :title="documentDialogTitle"
           width="80vw"
           destroy-on-close
         >
           <el-form label-width="90px" class="pr-4">
-            <el-form-item label="当前节点">
+            <el-form-item :label="documentDialogCurrentLabel">
               <el-input
-                :model-value="nodeDocumentTargetLabel || '-'"
+                :model-value="documentDialogTargetLabel || '-'"
                 readonly
               />
             </el-form-item>
             <el-form-item label="已绑文档">
               <div class="w-full text-sm text-gray-500">
-                当前共绑定 {{ currentNodeBoundDocumentCount }} 个文档
+                当前共绑定 {{ currentDocumentBoundCount }} 个文档
               </div>
             </el-form-item>
-            <template v-if="nodeDocumentDialogMode === 'bind'">
+            <template v-if="documentDialogMode === 'bind'">
               <el-form-item label="文档搜索">
                 <el-input
-                  v-model="nodeDocumentDialogKeyword"
+                  v-model="documentDialogKeyword"
                   clearable
                   placeholder="搜索文档名称"
-                  @input="searchNodeDocuments(nodeDocumentDialogKeyword)"
+                  @input="searchDocumentOptions(documentDialogKeyword)"
                 />
               </el-form-item>
               <el-form-item label="文档列表">
                 <div class="w-full">
                   <el-table
-                    ref="nodeDocumentTableRef"
-                    v-loading="nodeDocumentDialogLoading"
-                    :data="nodeDocumentDialogRecords"
+                    ref="documentDialogTableRef"
+                    v-loading="documentDialogLoading"
+                    :data="documentDialogRecords"
                     row-key="id"
                     height="45vh"
-                    @selection-change="handleNodeDocumentSelectionChange"
+                    @selection-change="handleDocumentSelectionChange"
                   >
                     <el-table-column type="selection" width="52" />
                     <el-table-column
@@ -4970,28 +4858,26 @@ onBeforeUnmount(() => {
                     <el-pagination
                       background
                       layout="total, sizes, prev, pager, next"
-                      :total="nodeDocumentDialogPagination.total"
-                      :current-page="nodeDocumentDialogPagination.page"
-                      :page-size="nodeDocumentDialogPagination.size"
+                      :total="documentDialogPagination.total"
+                      :current-page="documentDialogPagination.page"
+                      :page-size="documentDialogPagination.size"
                       :page-sizes="[20, 50, 100]"
-                      @size-change="onNodeDocumentSizeChange"
-                      @current-change="onNodeDocumentPageChange"
+                      @size-change="onDocumentSizeChange"
+                      @current-change="onDocumentPageChange"
                     />
                   </div>
                 </div>
               </el-form-item>
             </template>
             <el-form-item
-              :label="
-                nodeDocumentDialogMode === 'view' ? '绑定结果' : '已选文件'
-              "
+              :label="documentDialogMode === 'view' ? '绑定结果' : '已选文件'"
             >
               <div class="w-full">
                 <el-table
-                  :data="nodeDocumentSelectedDocuments"
+                  :data="documentDialogSelectedDocuments"
                   row-key="id"
                   height="28vh"
-                  empty-text="当前节点尚未绑定文档"
+                  :empty-text="documentDialogEmptyText"
                 >
                   <el-table-column
                     prop="name"
@@ -5010,125 +4896,13 @@ onBeforeUnmount(() => {
             </el-form-item>
           </el-form>
           <template #footer>
-            <el-button @click="nodeDocumentDialogVisible = false">
-              {{ nodeDocumentDialogMode === "view" ? "关闭" : "取消" }}
+            <el-button @click="documentDialogVisible = false">
+              {{ documentDialogMode === "view" ? "关闭" : "取消" }}
             </el-button>
             <el-button
-              v-if="nodeDocumentDialogMode === 'bind'"
+              v-if="documentDialogMode === 'bind'"
               type="primary"
-              @click="confirmNodeDocumentDialog"
-            >
-              确定
-            </el-button>
-          </template>
-        </el-dialog>
-
-        <el-dialog
-          v-model="objectDocumentDialogVisible"
-          :title="
-            objectDocumentDialogMode === 'view'
-              ? '查看构件绑定文件'
-              : '绑定构件文件'
-          "
-          width="80vw"
-          destroy-on-close
-        >
-          <el-form label-width="90px" class="pr-4">
-            <el-form-item label="当前构件">
-              <el-input
-                :model-value="objectDocumentTargetLabel || '-'"
-                readonly
-              />
-            </el-form-item>
-            <el-form-item label="已绑文档">
-              <div class="w-full text-sm text-gray-500">
-                当前共绑定 {{ objectDocumentSelectedDocuments.length }} 个文档
-              </div>
-            </el-form-item>
-            <template v-if="objectDocumentDialogMode === 'bind'">
-              <el-form-item label="文档搜索">
-                <el-input
-                  v-model="objectDocumentDialogKeyword"
-                  clearable
-                  placeholder="搜索文档名称"
-                  @input="searchObjectDocuments(objectDocumentDialogKeyword)"
-                />
-              </el-form-item>
-              <el-form-item label="文档列表">
-                <div class="w-full">
-                  <el-table
-                    ref="objectDocumentTableRef"
-                    v-loading="objectDocumentDialogLoading"
-                    :data="objectDocumentDialogRecords"
-                    row-key="id"
-                    height="45vh"
-                    @selection-change="handleObjectDocumentSelectionChange"
-                  >
-                    <el-table-column type="selection" width="52" />
-                    <el-table-column
-                      prop="name"
-                      label="文档名称"
-                      min-width="260"
-                      show-overflow-tooltip
-                    />
-                    <el-table-column prop="type" label="类型" width="120" />
-                    <el-table-column
-                      prop="updatedAt"
-                      label="更新时间"
-                      min-width="180"
-                    />
-                  </el-table>
-                  <div class="mt-3 flex justify-end">
-                    <el-pagination
-                      background
-                      layout="total, sizes, prev, pager, next"
-                      :total="objectDocumentDialogPagination.total"
-                      :current-page="objectDocumentDialogPagination.page"
-                      :page-size="objectDocumentDialogPagination.size"
-                      :page-sizes="[20, 50, 100]"
-                      @size-change="onObjectDocumentSizeChange"
-                      @current-change="onObjectDocumentPageChange"
-                    />
-                  </div>
-                </div>
-              </el-form-item>
-            </template>
-            <el-form-item
-              :label="
-                objectDocumentDialogMode === 'view' ? '绑定结果' : '已选文件'
-              "
-            >
-              <div class="w-full">
-                <el-table
-                  :data="objectDocumentSelectedDocuments"
-                  row-key="id"
-                  height="28vh"
-                  empty-text="当前构件尚未绑定文档"
-                >
-                  <el-table-column
-                    prop="name"
-                    label="文档名称"
-                    min-width="260"
-                    show-overflow-tooltip
-                  />
-                  <el-table-column prop="type" label="类型" width="120" />
-                  <el-table-column
-                    prop="updatedAt"
-                    label="更新时间"
-                    min-width="180"
-                  />
-                </el-table>
-              </div>
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="objectDocumentDialogVisible = false">
-              {{ objectDocumentDialogMode === "view" ? "关闭" : "取消" }}
-            </el-button>
-            <el-button
-              v-if="objectDocumentDialogMode === 'bind'"
-              type="primary"
-              @click="confirmObjectDocumentDialog"
+              @click="confirmDocumentDialog"
             >
               确定
             </el-button>

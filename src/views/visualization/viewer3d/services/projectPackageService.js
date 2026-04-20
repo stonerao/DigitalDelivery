@@ -32,6 +32,7 @@ export function createEmptyProjectPackage(scope, metadata = {}) {
       cameras: [],
       measurements: [],
       schemes: [],
+      bookmarks: [],
       clipping: createDefaultClippingState(),
       clippingPresets: [],
       anchorStyleDefaults: {
@@ -87,6 +88,7 @@ function createBaseSections(projectPackage) {
     "scene/cameras.json": payload.scene?.cameras || [],
     "scene/measurements.json": payload.scene?.measurements || [],
     "scene/schemes.json": payload.scene?.schemes || [],
+    "scene/bookmarks.json": payload.scene?.bookmarks || [],
     "scene/clipping.json":
       payload.scene?.clipping || createDefaultClippingState(),
     "scene/clipping-presets.json": payload.scene?.clippingPresets || [],
@@ -129,6 +131,7 @@ export function parseProjectPackageBundle(bundle, metadata = {}) {
       cameras: files["scene/cameras.json"] || [],
       measurements: files["scene/measurements.json"] || [],
       schemes: files["scene/schemes.json"] || [],
+      bookmarks: files["scene/bookmarks.json"] || [],
       clipping: files["scene/clipping.json"] || createDefaultClippingState(),
       clippingPresets: files["scene/clipping-presets.json"] || [],
       anchorStyleDefaults: files["scene/anchor-style-defaults.json"] || {
@@ -182,6 +185,7 @@ export function hasProjectPackageContent(projectPackage) {
     hasNonEmptyArray(projectPackage.scene?.cameras) ||
     hasNonEmptyArray(projectPackage.scene?.measurements) ||
     hasNonEmptyArray(projectPackage.scene?.schemes) ||
+    hasNonEmptyArray(projectPackage.scene?.bookmarks) ||
     hasNonEmptyArray(projectPackage.scene?.clippingPresets) ||
     Boolean(
       Object.keys(projectPackage.scene?.anchorStyleDefaults?.anchor || {})
@@ -219,6 +223,7 @@ export function loadProjectPackage(scope, metadata = {}) {
       cameras: [],
       measurements: [],
       schemes: [],
+      bookmarks: [],
       clipping: createDefaultClippingState(),
       clippingPresets: [],
       anchorStyleDefaults: {
