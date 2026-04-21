@@ -61,7 +61,8 @@ const emit = defineEmits([
 const materialThemeOptions = [
   { label: "Original", value: "original" },
   { label: "Textured Basic", value: "textured-basic" },
-  { label: "Basic", value: "basic" }
+  { label: "Basic", value: "basic" },
+  { label: "Wireframe", value: "wireframe" }
 ];
 </script>
 

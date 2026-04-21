@@ -258,7 +258,7 @@ export default [
           title: "日志审计",
           icon: "ep:document-checked"
         }
-      },
+      }/* ,
       {
         path: "/system/settings",
         name: "SystemSettings",
@@ -267,7 +267,7 @@ export default [
           title: "系统配置",
           icon: "ep:tools"
         }
-      }
+      } */
     ]
   }
   /* {

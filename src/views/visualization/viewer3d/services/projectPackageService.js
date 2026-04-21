@@ -170,9 +170,6 @@ function hasNonEmptyArray(value) {
 function hasClippingConfiguration(clipping) {
   if (!clipping || typeof clipping !== "object") return false;
   if (clipping.enabled || clipping.capEnabled) return true;
-  if (clipping.mode === "box") {
-    return ["x", "y", "z"].some(axis => Boolean(clipping.box?.[axis]?.enabled));
-  }
   return Boolean(clipping.presetId);
 }
 

@@ -77,7 +77,12 @@ const effectiveQuality = computed(() => {
 const materialThemeOverride = ref(null);
 
 function normalizeMaterialTheme(theme) {
-  if (theme === "original" || theme === "textured-basic" || theme === "basic") {
+  if (
+    theme === "original" ||
+    theme === "textured-basic" ||
+    theme === "basic" ||
+    theme === "wireframe"
+  ) {
     return theme;
   }
   return props.useBasicMaterial ? "textured-basic" : "original";
@@ -90,6 +95,7 @@ const effectiveMaterialTheme = computed(() =>
 const originalMaterialsByUUID = new Map();
 const basicMaterialCacheWithTextures = new WeakMap();
 const basicMaterialCacheNoTextures = new WeakMap();
+const basicWireframeMaterialCache = new WeakMap();
 
 // low 档：从贴图采样“代表色”，避免纯白/同色导致构件难以区分
 const representativeColorByTexture = new WeakMap();
@@ -398,21 +404,23 @@ function captureOriginalMaterials(root) {
   });
 }
 
-function toBasicMaterial(src, { keepTextures }) {
+function toBasicMaterial(src, { keepTextures, wireframe = false } = {}) {
   if (!src) return src;
-  if (src.isMeshBasicMaterial) {
+  if (src.isMeshBasicMaterial && !wireframe) {
     if (keepTextures) return src;
     // low 档：仅当完全无贴图时可复用
     if (!src.map && !src.alphaMap && !src.aoMap && !src.lightMap) return src;
   }
 
-  const cache = keepTextures
-    ? basicMaterialCacheWithTextures
-    : basicMaterialCacheNoTextures;
+  const cache = wireframe
+    ? basicWireframeMaterialCache
+    : keepTextures
+      ? basicMaterialCacheWithTextures
+      : basicMaterialCacheNoTextures;
   const cached = cache.get(src);
   if (cached) {
     // low 档：尽可能用贴图代表色修正基础色
-    if (!keepTextures && cached.color) {
+    if (!keepTextures && !wireframe && cached.color) {
       const rep = getRepresentativeColorForMaterial(src);
       if (rep) {
         cached.color.copy(rep);
@@ -430,7 +438,7 @@ function toBasicMaterial(src, { keepTextures }) {
     depthTest: src.depthTest,
     alphaTest: typeof src.alphaTest === "number" ? src.alphaTest : 0,
     vertexColors: src.vertexColors,
-    wireframe: Boolean(src.wireframe)
+    wireframe: wireframe || Boolean(src.wireframe)
   };
 
   // low 档：纯色（优先从贴图采样代表色，否则沿用原材质颜色）
@@ -454,10 +462,12 @@ function toBasicMaterial(src, { keepTextures }) {
 
   const basic = new THREE.MeshBasicMaterial(params);
   basic.name = src.name
-    ? `${src.name} (${keepTextures ? "basic" : "basic-no-texture"})`
-    : keepTextures
-      ? "basic"
-      : "basic-no-texture";
+    ? `${src.name} (${wireframe ? "wireframe" : keepTextures ? "basic" : "basic-no-texture"})`
+    : wireframe
+      ? "wireframe"
+      : keepTextures
+        ? "basic"
+        : "basic-no-texture";
   basic.needsUpdate = true;
 
   cache.set(src, basic);
@@ -468,15 +478,17 @@ function applyMaterialQuality(quality) {
   const q = normalizeQuality(quality);
   const theme = effectiveMaterialTheme.value;
   const materialMode =
-    q === "low"
-      ? "low"
-      : q === "medium"
-        ? "medium"
-        : theme === "original"
-          ? "high"
-          : theme === "basic"
-            ? "low"
-            : "medium";
+    theme === "wireframe"
+      ? "wireframe"
+      : q === "low"
+        ? "low"
+        : q === "medium"
+          ? "medium"
+          : theme === "original"
+            ? "high"
+            : theme === "basic"
+              ? "low"
+              : "medium";
   const keepTextures = materialMode === "medium";
 
   modelGroup.traverse(obj => {
@@ -490,8 +502,16 @@ function applyMaterialQuality(quality) {
     }
 
     const next = Array.isArray(original)
-      ? original.map(m => toBasicMaterial(m, { keepTextures }))
-      : toBasicMaterial(original, { keepTextures });
+      ? original.map(m =>
+          toBasicMaterial(m, {
+            keepTextures,
+            wireframe: materialMode === "wireframe"
+          })
+        )
+      : toBasicMaterial(original, {
+          keepTextures,
+          wireframe: materialMode === "wireframe"
+        });
     obj.material = next;
   });
 }
@@ -930,6 +950,24 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
   group.position.copy(position);
 
   if (isCamera) {
+    const hitArea = new THREE.Mesh(
+      new THREE.SphereGeometry(
+        Math.max(renderStyle.markerSize * 0.7, 0.28),
+        16,
+        16
+      ),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false
+      })
+    );
+    hitArea.userData.isHelper = true;
+    hitArea.userData.isSceneAnchor = true;
+    hitArea.userData.sceneAnchorId = anchor.id;
+    hitArea.userData.sceneAnchorType = anchor.type;
+    group.add(hitArea);
+
     const cameraSprite = createImageSprite(cameraMarkerTexture, {
       scaleX: renderStyle.markerSize,
       scaleY: renderStyle.markerSize,
@@ -1181,6 +1219,7 @@ function createRenderer(width, height, quality) {
   renderer = new THREE.WebGLRenderer({
     antialias: cfg.antialias,
     alpha: false,
+    stencil: true,
     preserveDrawingBuffer: false
   });
   renderer.setPixelRatio(cfg.pixelRatio);
@@ -1228,6 +1267,8 @@ function replaceRendererIfNeeded(quality) {
   if (canvasEl && onPointerMove)
     canvasEl.removeEventListener("pointermove", onPointerMove);
   if (canvasEl && onWheel) canvasEl.removeEventListener("wheel", onWheel);
+  if (canvasEl && onCanvasClick)
+    canvasEl.removeEventListener("click", onCanvasClick);
 
   const rect = rootRef.value.getBoundingClientRect();
   const width = Math.max(1, rect.width);
@@ -1278,6 +1319,11 @@ function replaceRendererIfNeeded(quality) {
       stats: payload?.stats || clippingTool?.getStats?.() || null
     });
   };
+  clippingTool.bindTransformControls?.({
+    camera,
+    domElement: canvasEl,
+    orbitControls: controls
+  });
   if (lastBounds?.box) {
     clippingTool.setBounds(lastBounds.box);
   }
@@ -1296,6 +1342,7 @@ function replaceRendererIfNeeded(quality) {
   if (onPointerMove)
     canvasEl.addEventListener("pointermove", onPointerMove, { passive: true });
   if (onWheel) canvasEl.addEventListener("wheel", onWheel, { passive: true });
+  if (onCanvasClick) canvasEl.addEventListener("click", onCanvasClick);
 
   return true;
 }
@@ -2094,6 +2141,7 @@ async function loadModel() {
 
     // 更新剖切工具边界
     if (clippingTool && lastBounds) {
+      clippingTool.setRoot?.(modelGroup);
       clippingTool.setBounds(lastBounds.box);
     }
 
@@ -2307,16 +2355,12 @@ function resetClipping() {
   clippingTool?.reset?.();
 }
 
-function setClippingEnabled(axis, enabled) {
-  clippingTool?.setPlaneEnabled(axis, enabled);
-}
-
-function setClippingRange(axis, range) {
-  clippingTool?.setPlaneRange?.(axis, range);
-}
-
 function setClippingPosition(axis, value) {
   clippingTool?.setPlanePosition(axis, value);
+}
+
+function setClippingEditMode(mode) {
+  clippingTool?.setEditMode?.(mode);
 }
 
 function getClippingState() {
@@ -2526,6 +2570,11 @@ function mountRenderer() {
       stats: payload?.stats || clippingTool?.getStats?.() || null
     });
   };
+  clippingTool.bindTransformControls?.({
+    camera,
+    domElement: canvasEl,
+    orbitControls: controls
+  });
   if (props.enableClipping) {
     clippingTool.enable();
   }
@@ -2537,6 +2586,9 @@ function mountRenderer() {
     pickRoot: modelGroup
   });
   objectPicker.setAdaptiveLevel?.("normal");
+  objectPicker.shouldIgnoreEvent = event =>
+    Boolean(clippingTool?.isInteractionActive?.()) ||
+    Boolean(findAnchorHit(event)?.anchor);
   objectPicker.onSelect = (obj, objProps, hitPoint) => {
     emit("object-select", {
       ...objProps,
@@ -2578,6 +2630,9 @@ function mountRenderer() {
       clippingTool?.beginDrag?.(e, camera, canvasEl) &&
       !isFirstPerson.value
     ) {
+      e.preventDefault();
+      e.stopPropagation();
+      canvasEl.setPointerCapture?.(e.pointerId);
       controls.enabled = false;
       canvasEl.style.cursor = "grabbing";
       pointerDown = {
@@ -2601,6 +2656,7 @@ function mountRenderer() {
     noteUserInteraction();
     if (clippingTool?.isDragging?.()) {
       clippingTool.endDrag();
+      canvasEl.releasePointerCapture?.(e.pointerId);
       controls.enabled = true;
       canvasEl.style.cursor = "";
       suppressNextCanvasClick = true;
@@ -2621,6 +2677,14 @@ function mountRenderer() {
       props.interactionMode !== "measure" &&
       props.interactionMode !== "pick"
     ) {
+      const anchorHit = findAnchorHit(e);
+      if (anchorHit?.anchor) {
+        e.preventDefault();
+        e.stopPropagation();
+        suppressNextCanvasClick = true;
+        emit("scene-anchor-click", anchorHit.anchor);
+        return;
+      }
       emit("scene-click");
     }
   };
@@ -2861,9 +2925,8 @@ defineExpose({
   // 剖切
   setClippingState,
   resetClipping,
-  setClippingEnabled,
-  setClippingRange,
   setClippingPosition,
+  setClippingEditMode,
   getClippingState,
   getClippingStats,
   setClippingAnimationOptions,

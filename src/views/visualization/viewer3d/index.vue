@@ -1488,61 +1488,32 @@ function applyDisplayMode(mode, withMessage = true) {
   }
 }
 
-const clippingX = ref([0, 1]);
-const clippingY = ref([0, 1]);
-const clippingZ = ref([0, 1]);
-const clippingXEnabled = ref(false);
-const clippingYEnabled = ref(false);
-const clippingZEnabled = ref(false);
+const clippingAxis = ref("x");
+const clippingPosition = ref(0.5);
 
 function toggleClipping() {
   enableClipping.value = !enableClipping.value;
+  if (enableClipping.value) applyPreviewClipping();
   message(enableClipping.value ? "已开启剖切模式" : "已关闭剖切模式", {
     type: "info"
   });
 }
 
-function onClippingXChange(val) {
-  viewerRef.value?.setClippingEnabled?.("x", val);
-  if (val) onClippingXPositionChange(clippingX.value);
-}
-
-function onClippingYChange(val) {
-  viewerRef.value?.setClippingEnabled?.("y", val);
-  if (val) onClippingYPositionChange(clippingY.value);
-}
-
-function onClippingZChange(val) {
-  viewerRef.value?.setClippingEnabled?.("z", val);
-  if (val) onClippingZPositionChange(clippingZ.value);
-}
-
-function applyClippingRange(axis, range) {
-  if (viewerRef.value?.setClippingRange) {
-    viewerRef.value.setClippingRange(axis, range);
-    return;
-  }
-  const max = Array.isArray(range) ? range[1] : range;
-  viewerRef.value?.setClippingPosition?.(axis, max);
-}
-
-function onClippingXPositionChange(val) {
-  applyClippingRange("x", val);
-}
-
-function onClippingYPositionChange(val) {
-  applyClippingRange("y", val);
-}
-
-function onClippingZPositionChange(val) {
-  applyClippingRange("z", val);
+function applyPreviewClipping() {
+  viewerRef.value?.setClippingPosition?.(
+    clippingAxis.value,
+    clippingPosition.value
+  );
 }
 
 watch(enableClipping, value => {
   if (!value) return;
-  if (clippingXEnabled.value) onClippingXPositionChange(clippingX.value);
-  if (clippingYEnabled.value) onClippingYPositionChange(clippingY.value);
-  if (clippingZEnabled.value) onClippingZPositionChange(clippingZ.value);
+  applyPreviewClipping();
+});
+
+watch([clippingAxis, clippingPosition], () => {
+  if (!enableClipping.value) return;
+  applyPreviewClipping();
 });
 
 function exportMeasurements() {
@@ -1767,60 +1738,30 @@ watch(
           </template>
           <div class="space-y-3">
             <div>
-              <el-checkbox
-                v-model="clippingXEnabled"
+              <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
+                剖切轴向
+              </div>
+              <el-segmented
+                v-model="clippingAxis"
+                :options="[
+                  { label: 'X', value: 'x' },
+                  { label: 'Y', value: 'y' },
+                  { label: 'Z', value: 'z' }
+                ]"
                 size="small"
-                @change="onClippingXChange"
-              >
-                X 轴剖切
-              </el-checkbox>
-              <el-slider
-                v-if="clippingXEnabled"
-                v-model="clippingX"
-                :min="0"
-                :max="1"
-                :step="0.01"
-                range
-                size="small"
-                @input="onClippingXPositionChange"
               />
             </div>
             <div>
-              <el-checkbox
-                v-model="clippingYEnabled"
-                size="small"
-                @change="onClippingYChange"
-              >
-                Y 轴剖切
-              </el-checkbox>
+              <div class="mb-1 flex items-center justify-between text-xs">
+                <span class="text-[var(--el-text-color-secondary)]">位置</span>
+                <span>{{ Math.round(clippingPosition * 100) }}%</span>
+              </div>
               <el-slider
-                v-if="clippingYEnabled"
-                v-model="clippingY"
+                v-model="clippingPosition"
                 :min="0"
                 :max="1"
                 :step="0.01"
-                range
                 size="small"
-                @input="onClippingYPositionChange"
-              />
-            </div>
-            <div>
-              <el-checkbox
-                v-model="clippingZEnabled"
-                size="small"
-                @change="onClippingZChange"
-              >
-                Z 轴剖切
-              </el-checkbox>
-              <el-slider
-                v-if="clippingZEnabled"
-                v-model="clippingZ"
-                :min="0"
-                :max="1"
-                :step="0.01"
-                range
-                size="small"
-                @input="onClippingZPositionChange"
               />
             </div>
           </div>

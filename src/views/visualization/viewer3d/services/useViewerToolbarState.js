@@ -64,6 +64,7 @@ export function useViewerToolbarState(options) {
     }
 
     if (roamingEnabled.value) return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
 
     const key = e.key?.toLowerCase();
     const toolValue = VIEWER_TOOL_SHORTCUT_MAP[key];

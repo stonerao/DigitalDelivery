@@ -29,17 +29,7 @@ function getInitialState() {
     deviceKeyword: "",
     sceneTree: null,
     layerCheckedKeys: [],
-    clippingState: createDefaultClippingState(),
-    clippingRanges: {
-      x: [0, 1],
-      y: [0, 1],
-      z: [0, 1]
-    },
-    clippingPlanesEnabled: {
-      x: false,
-      y: false,
-      z: false
-    }
+    clippingState: createDefaultClippingState()
   };
 }
 
@@ -143,49 +133,10 @@ export const useViewer3dProjectStore = defineStore("viewer3d-project", {
       this.layerCheckedKeys = Array.isArray(keys) ? [...keys] : [];
     },
     setClippingState(payload = {}) {
-      const normalized = normalizeClippingState(payload);
-      this.clippingState = normalized;
-      this.clippingRanges = {
-        x: [...normalized.box.x.range],
-        y: [...normalized.box.y.range],
-        z: [...normalized.box.z.range]
-      };
-      this.clippingPlanesEnabled = {
-        x: Boolean(normalized.box.x.enabled),
-        y: Boolean(normalized.box.y.enabled),
-        z: Boolean(normalized.box.z.enabled)
-      };
+      this.clippingState = normalizeClippingState(payload);
     },
     setClippingPresets(items = []) {
       this.clippingPresets = Array.isArray(items) ? items : [];
-    },
-    setClippingRange(axis, range) {
-      if (!["x", "y", "z"].includes(axis)) return;
-      this.clippingRanges[axis] = Array.isArray(range) ? [...range] : [0, 1];
-      this.clippingState = normalizeClippingState({
-        ...this.clippingState,
-        box: {
-          ...this.clippingState.box,
-          [axis]: {
-            ...this.clippingState.box[axis],
-            range: this.clippingRanges[axis]
-          }
-        }
-      });
-    },
-    setClippingPlaneEnabled(axis, value) {
-      if (!["x", "y", "z"].includes(axis)) return;
-      this.clippingPlanesEnabled[axis] = Boolean(value);
-      this.clippingState = normalizeClippingState({
-        ...this.clippingState,
-        box: {
-          ...this.clippingState.box,
-          [axis]: {
-            ...this.clippingState.box[axis],
-            enabled: this.clippingPlanesEnabled[axis]
-          }
-        }
-      });
     },
     resetProjectState() {
       Object.assign(this, getInitialState());

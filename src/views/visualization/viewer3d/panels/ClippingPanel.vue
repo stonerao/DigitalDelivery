@@ -1,4 +1,6 @@
 <script setup>
+import { computed } from "vue";
+
 defineOptions({
   name: "ClippingPanel"
 });
@@ -44,18 +46,6 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  feedbackOptions: {
-    type: Array,
-    default: () => []
-  },
-  presetOptions: {
-    type: Array,
-    default: () => []
-  },
-  savedPresets: {
-    type: Array,
-    default: () => []
-  },
   animationPlaying: {
     type: Boolean,
     default: false
@@ -84,16 +74,65 @@ const props = defineProps({
 
 const emit = defineEmits([
   "update:clippingState",
-  "apply-preset",
-  "save-preset",
-  "apply-saved-preset",
-  "remove-saved-preset",
   "toggle-animation",
   "update:animationSpeed",
   "update:animationMode",
   "update:animationAxis",
   "reset"
 ]);
+
+const currentTargetMode = computed(() => {
+  const targets = props.clippingState?.targets || {};
+  if (targets.mode !== "objects") return "scene";
+  return (targets.objectUuids || []).length > 1 ? "objects" : "object";
+});
+
+const targetObjects = computed(() => {
+  const targets = props.clippingState?.targets || {};
+  const uuids = Array.isArray(targets.objectUuids) ? targets.objectUuids : [];
+  const names = Array.isArray(targets.objectNames) ? targets.objectNames : [];
+  return uuids.map((uuid, index) => ({
+    uuid,
+    name: names[index] || uuid
+  }));
+});
+
+const selectedObjectUuid = computed(
+  () =>
+    props.selectedObjectInfo?.objectUuid || props.selectedObjectInfo?.uuid || ""
+);
+
+const selectedObjectName = computed(
+  () =>
+    props.selectedObjectInfo?.name ||
+    props.selectedObjectInfo?.objectName ||
+    props.selectedObjectInfo?.uuid ||
+    ""
+);
+
+const planeNormalText = computed(() => {
+  const normal = props.clippingState?.plane?.normal || [0, 0, 0];
+  return normal.map(item => Number(item || 0).toFixed(2)).join(", ");
+});
+
+const planePositionText = computed(() => {
+  const position = props.clippingState?.plane?.position || [0, 0, 0];
+  return position.map(item => Number(item || 0).toFixed(2)).join(", ");
+});
+
+const planeRows = computed(() => {
+  const planes = Array.isArray(props.clippingState?.planes)
+    ? props.clippingState.planes
+    : [];
+  return planes.map((item, index) => ({
+    ...item,
+    name: item.name || `剖切面 ${index + 1}`
+  }));
+});
+
+const activePlaneId = computed(
+  () => props.clippingState?.activePlaneId || planeRows.value[0]?.id || ""
+);
 
 function emitState(nextState) {
   emit("update:clippingState", nextState);
@@ -103,57 +142,205 @@ function patchState(patch = {}) {
   emitState({
     ...props.clippingState,
     ...patch,
+    targets: {
+      ...(props.clippingState?.targets || {}),
+      ...(patch.targets || {})
+    },
+    plane: {
+      ...(props.clippingState?.plane || {}),
+      ...(patch.plane || {})
+    },
     singlePlane: {
       ...(props.clippingState?.singlePlane || {}),
       ...(patch.singlePlane || {})
-    },
-    box: {
-      ...(props.clippingState?.box || {}),
-      ...(patch.box || {})
     }
   });
 }
 
 function updateSinglePlane(key, value) {
   patchState({
+    plane: {
+      custom: false
+    },
     singlePlane: {
       [key]: value
     }
   });
 }
 
-function updateBoxAxis(axis, patch = {}) {
-  patchState({
-    mode: "box",
-    box: {
-      [axis]: {
-        ...(props.clippingState?.box?.[axis] || {}),
-        ...patch
+function getSingleObjectPlanePatch() {
+  if (props.clippingState?.mode !== "single-plane") return {};
+  const firstPlaneId =
+    props.clippingState?.planes?.[0]?.id || props.clippingState?.plane?.id;
+  return {
+    singlePlane: {
+      position: 1,
+      direction: "positive"
+    },
+    plane: {
+      custom: false,
+      normalizedPosition: 1,
+      direction: "positive"
+    },
+    planes: Array.isArray(props.clippingState?.planes)
+      ? props.clippingState.planes.map(item =>
+          item.id === firstPlaneId
+            ? {
+                ...item,
+                custom: false,
+                normalizedPosition: 1,
+                direction: "positive"
+              }
+            : item
+        )
+      : props.clippingState?.planes
+  };
+}
+
+function onTargetModeChange(value) {
+  if (value === "scene") {
+    patchState({
+      targetMode: "scene",
+      targetObjectUuid: "",
+      targetObjectName: "",
+      targets: {
+        mode: "scene",
+        objectUuids: [],
+        objectNames: []
       }
+    });
+    return;
+  }
+
+  const currentUuid =
+    selectedObjectUuid.value ||
+    props.clippingState?.targetObjectUuid ||
+    targetObjects.value[0]?.uuid ||
+    "";
+  const currentName =
+    selectedObjectName.value ||
+    props.clippingState?.targetObjectName ||
+    targetObjects.value[0]?.name ||
+    "";
+  const existingUuids = targetObjects.value.map(item => item.uuid);
+  const existingNames = targetObjects.value.map(item => item.name);
+  const objectUuids =
+    value === "objects" && existingUuids.length
+      ? existingUuids
+      : currentUuid
+        ? [currentUuid]
+        : [];
+  const objectNames =
+    value === "objects" && existingNames.length
+      ? existingNames
+      : currentName
+        ? [currentName]
+        : [];
+
+  patchState({
+    ...(value === "object" ? getSingleObjectPlanePatch() : {}),
+    targetMode: objectUuids.length ? "object" : "scene",
+    targetObjectUuid: objectUuids[0] || "",
+    targetObjectName: objectNames[0] || "",
+    targets: {
+      mode: objectUuids.length ? "objects" : "scene",
+      objectUuids,
+      objectNames
     }
   });
 }
 
-function onPresetChange(value) {
-  if (!value) return;
-  emit("apply-preset", value);
+function addCurrentTarget() {
+  if (!selectedObjectUuid.value) return;
+  const next = [...targetObjects.value];
+  if (!next.some(item => item.uuid === selectedObjectUuid.value)) {
+    next.push({
+      uuid: selectedObjectUuid.value,
+      name: selectedObjectName.value || selectedObjectUuid.value
+    });
+  }
+  patchTargetObjects(next);
 }
 
-function onTargetModeChange(value) {
-  const isObject = value === "object";
+function removeTargetObject(uuid) {
+  patchTargetObjects(targetObjects.value.filter(item => item.uuid !== uuid));
+}
+
+function clearTargetObjects() {
+  patchTargetObjects([]);
+}
+
+function patchTargetObjects(items = []) {
   patchState({
-    targetMode: isObject ? "object" : "scene",
-    targetObjectUuid: isObject
-      ? props.selectedObjectInfo?.uuid ||
-        props.clippingState?.targetObjectUuid ||
-        ""
-      : "",
-    targetObjectName: isObject
-      ? props.selectedObjectInfo?.name ||
-        props.clippingState?.targetObjectName ||
-        ""
-      : ""
+    targetMode: items.length ? "object" : "scene",
+    targetObjectUuid: items[0]?.uuid || "",
+    targetObjectName: items[0]?.name || "",
+    targets: {
+      mode: items.length ? "objects" : "scene",
+      objectUuids: items.map(item => item.uuid),
+      objectNames: items.map(item => item.name)
+    }
   });
+}
+
+function resetPlaneAngle() {
+  patchState({
+    plane: {
+      custom: false
+    }
+  });
+}
+
+function createPanelPlane(index = planeRows.value.length) {
+  const axis = ["x", "y", "z"][index % 3];
+  return {
+    id: `plane-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    name: `剖切面 ${index + 1}`,
+    enabled: true,
+    custom: false,
+    axis,
+    normalizedPosition: 0.5,
+    direction: "positive",
+    normal: axis === "y" ? [0, 1, 0] : axis === "z" ? [0, 0, 1] : [1, 0, 0],
+    constant: 0,
+    position: [0, 0, 0],
+    quaternion: [0, 0, 0, 1],
+    size: [1, 1]
+  };
+}
+
+function addPlane() {
+  const next = [...planeRows.value, createPanelPlane()];
+  patchState({
+    mode: "multi-plane",
+    planes: next,
+    activePlaneId: next[next.length - 1]?.id || ""
+  });
+}
+
+function removePlane(id) {
+  const next = planeRows.value.filter(item => item.id !== id);
+  patchState({
+    planes: next.length ? next : [createPanelPlane(0)],
+    activePlaneId: next[0]?.id || ""
+  });
+}
+
+function setActivePlane(id) {
+  patchState({ activePlaneId: id });
+}
+
+function patchPlane(id, patch = {}) {
+  patchState({
+    planes: planeRows.value.map(item =>
+      item.id === id ? { ...item, ...patch } : item
+    ),
+    activePlaneId: id
+  });
+}
+
+function resetPlaneToAxis(id) {
+  patchPlane(id, { custom: false });
 }
 </script>
 
@@ -190,24 +377,49 @@ function onTargetModeChange(value) {
       <div class="dd-clipping-row">
         <span class="dd-label">剖切对象</span>
         <el-segmented
-          :model-value="clippingState.targetMode || 'scene'"
+          :model-value="currentTargetMode"
           :options="targetOptions"
           size="small"
           @change="onTargetModeChange"
         />
       </div>
 
-      <div
-        v-if="(clippingState.targetMode || 'scene') === 'object'"
-        class="dd-clipping-target-tip"
-      >
+      <div v-if="currentTargetMode !== 'scene'" class="dd-clipping-target-tip">
         {{
-          clippingState.targetObjectName
-            ? `当前对象：${clippingState.targetObjectName}`
-            : selectedObjectInfo?.name
-              ? `当前对象：${selectedObjectInfo.name}`
-              : "请先在场景中选中一个物体，再进行单物体剖切"
+          targetObjects.length
+            ? `当前目标：${targetObjects.length} 个物体`
+            : "请先在场景中选中一个物体，再加入剖切目标"
         }}
+      </div>
+
+      <div v-if="currentTargetMode === 'objects'" class="dd-target-actions">
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          :disabled="!selectedObjectUuid"
+          @click="addCurrentTarget"
+        >
+          加入当前选中
+        </el-button>
+        <el-button size="small" plain @click="clearTargetObjects">
+          清空目标
+        </el-button>
+      </div>
+
+      <div
+        v-if="currentTargetMode === 'objects' && targetObjects.length"
+        class="dd-target-list"
+      >
+        <el-tag
+          v-for="item in targetObjects"
+          :key="item.uuid"
+          size="small"
+          closable
+          @close="removeTargetObject(item.uuid)"
+        >
+          {{ item.name }}
+        </el-tag>
       </div>
 
       <div class="dd-clipping-stats">
@@ -240,6 +452,29 @@ function onTargetModeChange(value) {
         />
       </div>
 
+      <div class="dd-clipping-row dd-clipping-feedback">
+        <span class="dd-label">画布编辑</span>
+        <el-segmented
+          :model-value="clippingState.editMode || 'translate'"
+          :options="[
+            { label: '移动', value: 'translate' },
+            { label: '旋转', value: 'rotate' }
+          ]"
+          size="small"
+          @change="patchState({ editMode: $event })"
+        />
+      </div>
+
+      <template v-if="clippingState.mode === 'single-plane'">
+        <div class="dd-plane-info">
+          <div>法线：{{ planeNormalText }}</div>
+          <div>位置：{{ planePositionText }}</div>
+          <el-button size="small" link @click="resetPlaneAngle">
+            重置为轴向剖切
+          </el-button>
+        </div>
+      </template>
+
       <div class="dd-clipping-row">
         <span class="dd-label">剖切面填充</span>
         <el-switch
@@ -247,23 +482,6 @@ function onTargetModeChange(value) {
           size="small"
           @update:model-value="patchState({ capEnabled: $event })"
         />
-      </div>
-
-      <div class="dd-clipping-row dd-clipping-feedback">
-        <span class="dd-label">视觉反馈</span>
-        <el-select
-          :model-value="clippingState.feedbackMode"
-          size="small"
-          placeholder="选择反馈方式"
-          @change="patchState({ feedbackMode: $event })"
-        >
-          <el-option
-            v-for="item in feedbackOptions"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
       </div>
 
       <div class="dd-clipping-row dd-clipping-animation-actions">
@@ -327,68 +545,6 @@ function onTargetModeChange(value) {
         />
       </div>
 
-      <div class="dd-clipping-row dd-clipping-preset">
-        <span class="dd-label">内置预设</span>
-        <el-select
-          :model-value="clippingState.presetId"
-          placeholder="选择预设"
-          size="small"
-          @change="onPresetChange"
-        >
-          <el-option
-            v-for="item in presetOptions"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          />
-        </el-select>
-      </div>
-
-      <div class="dd-clipping-row">
-        <span class="dd-label">当前状态</span>
-        <el-button
-          size="small"
-          type="primary"
-          plain
-          @click="emit('save-preset')"
-        >
-          保存为预设
-        </el-button>
-      </div>
-
-      <div v-if="savedPresets.length" class="dd-saved-preset-list">
-        <div class="dd-saved-preset-title">已保存预设</div>
-        <div
-          v-for="item in savedPresets"
-          :key="item.id"
-          class="dd-saved-preset-item"
-        >
-          <div class="dd-saved-preset-meta">
-            <div class="dd-saved-preset-name">{{ item.name }}</div>
-            <div class="dd-saved-preset-time">
-              {{ new Date(item.createdAt || Date.now()).toLocaleString() }}
-            </div>
-          </div>
-          <div class="dd-saved-preset-actions">
-            <el-button
-              size="small"
-              link
-              @click="emit('apply-saved-preset', item)"
-            >
-              应用
-            </el-button>
-            <el-button
-              size="small"
-              link
-              type="danger"
-              @click="emit('remove-saved-preset', item.id)"
-            >
-              删除
-            </el-button>
-          </div>
-        </div>
-      </div>
-
       <template v-if="clippingState.mode === 'single-plane'">
         <div class="dd-clipping-row">
           <span class="dd-label">轴向</span>
@@ -430,49 +586,110 @@ function onTargetModeChange(value) {
         </div>
       </template>
 
-      <template v-else>
-        <div
-          v-for="axis in ['x', 'y', 'z']"
-          :key="axis"
-          class="dd-clipping-axis-block"
-        >
-          <div class="dd-axis-head">
-            <el-checkbox
-              :model-value="clippingState.box?.[axis]?.enabled"
-              size="small"
-              @update:model-value="
-                updateBoxAxis(axis, {
-                  enabled: $event
-                })
-              "
-            >
-              {{ axis.toUpperCase() }} 轴
-            </el-checkbox>
-            <span class="dd-axis-range">
-              {{
-                Math.round((clippingState.box?.[axis]?.range?.[0] || 0) * 100)
-              }}% -
-              {{
-                Math.round((clippingState.box?.[axis]?.range?.[1] || 1) * 100)
-              }}%
-            </span>
-          </div>
-
-          <el-slider
-            :model-value="clippingState.box?.[axis]?.range"
-            :min="0"
-            :max="1"
-            :step="0.01"
-            range
+      <template v-else-if="clippingState.mode === 'multi-plane'">
+        <div class="dd-plane-list-head">
+          <span class="dd-label">平面列表</span>
+          <el-button
             size="small"
-            :disabled="!clippingState.box?.[axis]?.enabled"
-            @update:model-value="
-              updateBoxAxis(axis, {
-                enabled: true,
-                range: $event
-              })
-            "
-          />
+            type="primary"
+            plain
+            :disabled="planeRows.length >= 6"
+            @click="addPlane"
+          >
+            新增平面
+          </el-button>
+        </div>
+
+        <div class="dd-plane-list">
+          <div
+            v-for="item in planeRows"
+            :key="item.id"
+            class="dd-plane-item"
+            :class="{ 'is-active': item.id === activePlaneId }"
+            @click="setActivePlane(item.id)"
+          >
+            <div class="dd-plane-item-head">
+              <el-checkbox
+                :model-value="item.enabled"
+                size="small"
+                @click.stop
+                @update:model-value="
+                  patchPlane(item.id, {
+                    enabled: $event
+                  })
+                "
+              >
+                {{ item.name }}
+              </el-checkbox>
+              <el-button
+                size="small"
+                link
+                type="danger"
+                :disabled="planeRows.length <= 1"
+                @click.stop="removePlane(item.id)"
+              >
+                删除
+              </el-button>
+            </div>
+
+            <div class="dd-plane-item-row">
+              <span>轴向</span>
+              <el-segmented
+                :model-value="item.axis"
+                :options="axisOptions"
+                size="small"
+                @click.stop
+                @change="
+                  patchPlane(item.id, {
+                    axis: $event,
+                    custom: false
+                  })
+                "
+              />
+            </div>
+            <div class="dd-plane-item-row">
+              <span>方向</span>
+              <el-segmented
+                :model-value="item.direction"
+                :options="directionOptions"
+                size="small"
+                @click.stop
+                @change="
+                  patchPlane(item.id, {
+                    direction: $event,
+                    custom: false
+                  })
+                "
+              />
+            </div>
+            <div class="dd-plane-item-row is-slider">
+              <span
+                >{{ Math.round((item.normalizedPosition || 0) * 100) }}%</span
+              >
+              <el-slider
+                :model-value="item.normalizedPosition"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                size="small"
+                @click.stop
+                @update:model-value="
+                  patchPlane(item.id, {
+                    normalizedPosition: $event,
+                    custom: false
+                  })
+                "
+              />
+            </div>
+            <el-button
+              v-if="item.custom"
+              size="small"
+              link
+              @click.stop="resetPlaneToAxis(item.id)"
+            >
+              重置为轴向平面
+            </el-button>
+          </div>
         </div>
       </template>
     </div>
@@ -525,6 +742,32 @@ function onTargetModeChange(value) {
   color: var(--el-text-color-secondary);
 }
 
+.dd-target-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: -4px;
+}
+
+.dd-target-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 88px;
+  overflow-y: auto;
+}
+
+.dd-plane-info {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
 .dd-clipping-row {
   display: flex;
   align-items: center;
@@ -557,7 +800,6 @@ function onTargetModeChange(value) {
   color: var(--el-text-color-primary);
 }
 
-.dd-clipping-preset :deep(.el-select),
 .dd-clipping-feedback :deep(.el-select) {
   width: 160px;
 }
@@ -575,6 +817,58 @@ function onTargetModeChange(value) {
   gap: 8px;
 }
 
+.dd-clipping-axis-block.is-disabled {
+  opacity: 0.48;
+}
+
+.dd-plane-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dd-plane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.dd-plane-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.dd-plane-item.is-active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.dd-plane-item-head,
+.dd-plane-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dd-plane-item-row.is-slider {
+  flex-direction: column;
+  align-items: stretch;
+}
+
 .dd-slider-head,
 .dd-axis-head {
   display: flex;
@@ -586,50 +880,5 @@ function onTargetModeChange(value) {
 
 .dd-axis-range {
   color: var(--el-text-color-secondary);
-}
-
-.dd-saved-preset-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.dd-saved-preset-title {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.dd-saved-preset-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-}
-
-.dd-saved-preset-meta {
-  min-width: 0;
-}
-
-.dd-saved-preset-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-}
-
-.dd-saved-preset-time {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.dd-saved-preset-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 </style>

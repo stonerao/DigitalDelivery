@@ -63,11 +63,9 @@ export function createViewerAdapter() {
     getFirstPersonState: () => Boolean(getExposeValue(viewer?.isFirstPerson)),
     setClippingState: state => invoke("setClippingState", state),
     resetClipping: () => invoke("resetClipping"),
-    setClippingEnabled: (axis, enabled) =>
-      invoke("setClippingEnabled", axis, enabled),
-    setClippingRange: (axis, range) => invoke("setClippingRange", axis, range),
     setClippingPosition: (axis, value) =>
       invoke("setClippingPosition", axis, value),
+    setClippingEditMode: mode => invoke("setClippingEditMode", mode),
     getClippingState: () => invoke("getClippingState"),
     getClippingStats: () => invoke("getClippingStats"),
     setClippingAnimationOptions: options =>

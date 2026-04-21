@@ -3,7 +3,7 @@ export const VIEWER_TOOL_OPTIONS = [
   { label: "平移(W)", value: "pan" },
   { label: "缩放(S)", value: "zoom" },
   { label: "测量(C)", value: "measure" },
-  { label: "拾取(Z)", value: "pick" }
+  { label: "拾取(F)", value: "pick" }
 ];
 
 export const VIEWER_TOOL_SHORTCUT_MAP = {
@@ -11,7 +11,7 @@ export const VIEWER_TOOL_SHORTCUT_MAP = {
   w: "pan",
   s: "zoom",
   c: "measure",
-  z: "pick"
+  f: "pick"
 };
 
 export const VIEWER_PRESET_VIEWS = [

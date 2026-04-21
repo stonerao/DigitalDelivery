@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import {
   cloneClippingState,
   createDefaultClippingState,
@@ -9,14 +10,60 @@ const AXES = ["x", "y", "z"];
 const AXIS_COLORS = {
   x: 0xff5b5b,
   y: 0x32c26b,
-  z: 0x4d8dff
+  z: 0x4d8dff,
+  custom: 0xffb020
 };
 const CLIPPING_CAP_OFFSET = -0.0015;
 const CLIPPING_HELPER_OFFSET = 0.006;
+const CLIPPING_HELPER_OPACITY = 0.12;
+const CLIPPING_HELPER_CAP_OPACITY = 0.035;
+const SECTION_CAP_PADDING = 1.08;
+const SECTION_CAP_RENDER_ORDER = 940;
+const SECTION_CAP_MAX_MESHES = 1800;
+const SECTION_CAP_FALLBACK_COLOR = 0xb8b4aa;
+const NON_TARGET_OPACITY = 0.2;
+const STATS_THROTTLE_MS = 200;
+const LOCAL_PLANE_NORMAL = new THREE.Vector3(0, 0, 1);
+
 function disposeHelper(helper) {
   if (!helper) return;
   helper.traverse?.(child => {
     child.geometry?.dispose?.();
+    if (Array.isArray(child.material)) {
+      child.material.forEach(item => item?.dispose?.());
+    } else {
+      child.material?.dispose?.();
+    }
+  });
+}
+
+function getMaterials(obj) {
+  return Array.isArray(obj?.material)
+    ? obj.material.filter(Boolean)
+    : obj?.material
+      ? [obj.material]
+      : [];
+}
+
+function getBoxCorners(box) {
+  return [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z)
+  ];
+}
+
+function disposeSectionCapGroup(group) {
+  if (!group) return;
+  group.traverse?.(child => {
+    if (child.userData?.isSectionCapSurface) {
+      child.geometry?.dispose?.();
+    }
     if (Array.isArray(child.material)) {
       child.material.forEach(item => item?.dispose?.());
     } else {
@@ -53,6 +100,18 @@ export class ClippingTool {
     this.onChange = null;
     this.feedbackMaterials = new Set();
     this.materialOverrides = new Map();
+    this.targetOpaqueMaterials = new Map();
+    this.objectIndex = new Map();
+    this.dynamicPlanes = new Map();
+    this.lastMaterialSignature = "";
+    this.capSignature = "";
+    this.lastStatsAt = 0;
+    this.transformControls = null;
+    this.transformHelper = null;
+    this.transformControlsHelper = null;
+    this.orbitControls = null;
+    this.transformRafId = 0;
+    this.syncingTransform = false;
     this.stats = {
       enabled: false,
       mode: "single-plane",
@@ -61,6 +120,7 @@ export class ClippingTool {
       totalMeshCount: 0
     };
     this.planes = {
+      custom: new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
       xMin: new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
       xMax: new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
       yMin: new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
@@ -68,10 +128,50 @@ export class ClippingTool {
       zMin: new THREE.Plane(new THREE.Vector3(0, 0, -1), 0),
       zMax: new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
     };
+    this._rebuildObjectIndex();
+  }
+
+  bindTransformControls({ camera, domElement, orbitControls } = {}) {
+    this.disposeTransformControls();
+    if (!camera || !domElement) return;
+    this.orbitControls = orbitControls || null;
+    this.transformControls = new TransformControls(camera, domElement);
+    this.transformControls.setMode(this.state.editMode || "translate");
+    this.transformControls.addEventListener("dragging-changed", event => {
+      if (this.orbitControls) this.orbitControls.enabled = !event.value;
+    });
+    this.transformControls.addEventListener("objectChange", () => {
+      this._scheduleTransformCommit();
+    });
+    this.transformControlsHelper =
+      typeof this.transformControls.getHelper === "function"
+        ? this.transformControls.getHelper()
+        : this.transformControls;
+    this.transformControlsHelper.userData.isHelper = true;
+    this.scene.add(this.transformControlsHelper);
+    this._syncTransformControls();
+  }
+
+  disposeTransformControls() {
+    if (this.transformRafId) {
+      cancelAnimationFrame(this.transformRafId);
+      this.transformRafId = 0;
+    }
+    this.transformControls?.detach?.();
+    this.transformControls?.dispose?.();
+    if (this.transformControlsHelper) {
+      this.scene.remove(this.transformControlsHelper);
+    }
+    this.transformControls = null;
+    this.transformControlsHelper = null;
+    this.transformHelper = null;
+    this.orbitControls = null;
   }
 
   setRoot(root) {
     this.root = root || this.scene;
+    this._rebuildObjectIndex();
+    this.lastMaterialSignature = "";
     this.refreshMaterials();
     this._applyFeedback([]);
   }
@@ -82,17 +182,11 @@ export class ClippingTool {
   }
 
   enable() {
-    this.setState({
-      ...this.state,
-      enabled: true
-    });
+    this.setState({ ...this.state, enabled: true });
   }
 
   disable() {
-    this.setState({
-      ...this.state,
-      enabled: false
-    });
+    this.setState({ ...this.state, enabled: false });
   }
 
   reset() {
@@ -109,13 +203,12 @@ export class ClippingTool {
     this.setState({
       ...this.state,
       ...patch,
+      targets: { ...this.state.targets, ...(patch.targets || {}) },
+      plane: { ...this.state.plane, ...(patch.plane || {}) },
+      planes: patch.planes || this.state.planes,
       singlePlane: {
         ...this.state.singlePlane,
         ...(patch.singlePlane || {})
-      },
-      box: {
-        ...this.state.box,
-        ...(patch.box || {})
       }
     });
   }
@@ -136,43 +229,10 @@ export class ClippingTool {
     this.patchState({ helpersVisible: visible });
   }
 
-  togglePlane(axis) {
-    if (!AXES.includes(axis)) return;
-    const next = !this.state.box[axis]?.enabled;
-    this.setPlaneEnabled(axis, next);
-  }
-
-  setPlaneEnabled(axis, enabled) {
-    if (!AXES.includes(axis)) return;
-    this.setState({
-      ...this.state,
-      enabled: Boolean(this.state.enabled || enabled),
-      mode: "box",
-      box: {
-        ...this.state.box,
-        [axis]: {
-          ...this.state.box[axis],
-          enabled: Boolean(enabled)
-        }
-      }
-    });
-  }
-
-  setPlaneRange(axis, range) {
-    if (!AXES.includes(axis)) return;
-    this.setState({
-      ...this.state,
-      enabled: true,
-      mode: "box",
-      box: {
-        ...this.state.box,
-        [axis]: {
-          ...this.state.box[axis],
-          enabled: true,
-          range
-        }
-      }
-    });
+  setEditMode(mode) {
+    const nextMode = mode === "rotate" ? "rotate" : "translate";
+    this.patchState({ editMode: nextMode });
+    this.transformControls?.setMode?.(nextMode);
   }
 
   setPlanePosition(axis, normalizedValue) {
@@ -181,6 +241,7 @@ export class ClippingTool {
       ...this.state,
       enabled: true,
       mode: "single-plane",
+      plane: { ...this.state.plane, custom: false },
       singlePlane: {
         ...this.state.singlePlane,
         axis,
@@ -189,20 +250,26 @@ export class ClippingTool {
     });
   }
 
-  refreshMaterials() {
-    this._resetFeedbackMaterials();
+  refreshMaterials({ lightweight = false } = {}) {
+    if (!lightweight) this._resetFeedbackMaterials();
+
     const activePlanes = this.state.enabled ? this._getActivePlanes() : [];
     const targetRoot = this.root || this.scene;
-    const clippingRoot = this._resolveClippingRoot();
+    const targetRoots = this._resolveTargetRoots();
     const objectModeActive =
       this.state.enabled &&
-      this.state.targetMode === "object" &&
-      Boolean(clippingRoot);
+      this.state.targets.mode === "objects" &&
+      targetRoots.length > 0;
+    const materialSignature = this._getMaterialSignature();
 
-    if (objectModeActive) {
-      this._ensureObjectMaterialOverrides(targetRoot);
-    } else {
+    if (materialSignature !== this.lastMaterialSignature) {
+      this._restoreTargetOpaqueMaterials();
       this._restoreMaterialOverrides();
+      this.lastMaterialSignature = materialSignature;
+    }
+    if (objectModeActive) {
+      this._ensureObjectMaterialOverrides(targetRoot, targetRoots);
+      this._applyTargetOpaqueMaterials(targetRoots);
     }
 
     targetRoot?.traverse?.(obj => {
@@ -210,24 +277,13 @@ export class ClippingTool {
         return;
       }
 
-      const materials = Array.isArray(obj.material)
-        ? obj.material
-        : [obj.material];
       const shouldClip =
         activePlanes.length > 0 &&
-        (this.state.targetMode !== "object" ||
-          (clippingRoot && this._isDescendantOf(obj, clippingRoot)));
-      materials.filter(Boolean).forEach(material => {
+        (!objectModeActive || this._isDescendantOfAny(obj, targetRoots));
+      getMaterials(obj).forEach(material => {
         material.clippingPlanes = shouldClip ? activePlanes : null;
         material.clipShadows = shouldClip;
         material.clipIntersection = false;
-        if (objectModeActive && !shouldClip) {
-          material.transparent = true;
-          material.opacity = Math.min(Number(material.opacity ?? 1), 0.12);
-          if (material.depthWrite !== undefined) {
-            material.depthWrite = false;
-          }
-        }
         material.needsUpdate = true;
       });
     });
@@ -238,7 +294,8 @@ export class ClippingTool {
       !this.state.enabled ||
       !this._getEffectiveBounds() ||
       !camera ||
-      !domElement
+      !domElement ||
+      this.transformControls?.dragging
     ) {
       return false;
     }
@@ -252,7 +309,7 @@ export class ClippingTool {
     this.raycaster.setFromCamera(this.pointer, camera);
 
     const targets = Object.values(this.helpers)
-      .map(item => item?.hitMesh)
+      .map(item => item?.userData?.hitMesh)
       .filter(Boolean);
     if (!targets.length) return false;
 
@@ -260,6 +317,8 @@ export class ClippingTool {
     if (!hit?.object?.userData?.clippingEntry) return false;
 
     const entry = hit.object.userData.clippingEntry;
+    if (entry.key === "custom") return false;
+
     const center = this._getEntryCenter(entry);
     const axisNormal = this._getEntryAxisNormal(entry);
     const viewNormal = new THREE.Vector3();
@@ -273,6 +332,7 @@ export class ClippingTool {
 
     this.dragState = {
       key: entry.key,
+      planeId: entry.planeId || "",
       axis: entry.axis,
       center: center.clone(),
       point: this.dragPoint.clone(),
@@ -313,7 +373,7 @@ export class ClippingTool {
     if (!nextState) return null;
 
     this.state = normalizeClippingState(nextState);
-    this._applyState();
+    this._applyState({ lightweight: true, source: "drag" });
     this._emitChange("drag");
     return this.getState();
   }
@@ -321,6 +381,10 @@ export class ClippingTool {
   endDrag() {
     const wasDragging = Boolean(this.dragState);
     this.dragState = null;
+    if (wasDragging) {
+      this._applyState();
+      this._emitChange("drag-end");
+    }
     return wasDragging;
   }
 
@@ -328,11 +392,21 @@ export class ClippingTool {
     return Boolean(this.dragState);
   }
 
+  isInteractionActive() {
+    return Boolean(
+      this.dragState ||
+      this.transformControls?.dragging ||
+      this.transformControls?.axis
+    );
+  }
+
   dispose() {
     this.stopAnimation();
+    this.disposeTransformControls();
     this.renderer.localClippingEnabled = false;
     this.renderer.clippingPlanes = [];
     this._resetFeedbackMaterials();
+    this._restoreTargetOpaqueMaterials();
     this._restoreMaterialOverrides();
     this.refreshMaterials();
     this._removeHelpers();
@@ -394,9 +468,16 @@ export class ClippingTool {
     if (!nextState) return false;
 
     this.state = normalizeClippingState(nextState);
-    this._applyState();
+    this._applyState({ lightweight: true, source: "animation" });
     this._emitChange("animation");
     return true;
+  }
+
+  _rebuildObjectIndex() {
+    this.objectIndex.clear();
+    this.root?.traverse?.(obj => {
+      if (obj?.uuid) this.objectIndex.set(obj.uuid, obj);
+    });
   }
 
   _resolveAxisPosition(axis, normalizedPosition) {
@@ -420,6 +501,12 @@ export class ClippingTool {
   _getEntryCenter(entry) {
     const bounds = this._getEffectiveBounds();
     if (!bounds) return new THREE.Vector3();
+    if (entry.center) return entry.center.clone();
+    if (entry.key === "custom") {
+      return new THREE.Vector3().fromArray(
+        this.state.plane.position || [0, 0, 0]
+      );
+    }
     const center = bounds.getCenter(new THREE.Vector3());
     if (entry.key.endsWith("Min")) {
       center[entry.axis] = this.planes[entry.key].constant;
@@ -439,18 +526,15 @@ export class ClippingTool {
     if (!this.dragState || !this._getEffectiveBounds()) return null;
 
     const axis = this.dragState.axis;
-    const currentCenter = this._getEntryCenter({
-      key: this.dragState.key,
-      axis,
-      plane: this.planes[this.dragState.key]
-    });
-    const nextWorld = currentCenter[axis] + axisDelta;
+    if (!AXES.includes(axis)) return null;
+    const nextWorld = this.dragState.center[axis] + axisDelta;
     const nextRatio = this._resolveAxisRatio(axis, nextWorld);
 
     if (this.state.mode === "single-plane") {
       return {
         ...this.state,
         enabled: true,
+        plane: { ...this.state.plane, custom: false },
         singlePlane: {
           ...this.state.singlePlane,
           axis,
@@ -459,26 +543,25 @@ export class ClippingTool {
       };
     }
 
-    const currentRange = [...this.state.box[axis].range];
-    if (this.dragState.key.endsWith("Min")) {
-      currentRange[0] = Math.min(nextRatio, currentRange[1] - 0.01);
-    } else {
-      currentRange[1] = Math.max(nextRatio, currentRange[0] + 0.01);
+    if (this.state.mode === "multi-plane" && this.dragState.planeId) {
+      return {
+        ...this.state,
+        enabled: true,
+        activePlaneId: this.dragState.planeId,
+        planes: this.state.planes.map(item =>
+          item.id === this.dragState.planeId
+            ? {
+                ...item,
+                axis,
+                custom: false,
+                normalizedPosition: nextRatio
+              }
+            : item
+        )
+      };
     }
 
-    return {
-      ...this.state,
-      enabled: true,
-      mode: "box",
-      box: {
-        ...this.state.box,
-        [axis]: {
-          ...this.state.box[axis],
-          enabled: true,
-          range: currentRange
-        }
-      }
-    };
+    return null;
   }
 
   _buildAnimatedState(step) {
@@ -486,78 +569,34 @@ export class ClippingTool {
     const animationMode = this.animation.mode;
     const animationAxis = this.animation.axis;
 
-    if (normalized.mode === "single-plane") {
-      const activeAxis =
-        animationAxis !== "auto" ? animationAxis : normalized.singlePlane.axis;
-      let nextPosition =
-        Number(normalized.singlePlane.position || 0.5) +
-        step * this.animation.direction;
+    if (normalized.mode !== "single-plane") return normalized;
 
-      if (animationMode === "loop") {
-        if (nextPosition > 1) nextPosition = 0;
-        if (nextPosition < 0) nextPosition = 1;
-      } else if (nextPosition >= 1) {
-        nextPosition = 1;
-        this.animation.direction = -1;
-      } else if (nextPosition <= 0) {
-        nextPosition = 0;
-        this.animation.direction = 1;
-      }
+    const activeAxis =
+      animationAxis !== "auto" ? animationAxis : normalized.singlePlane.axis;
+    let nextPosition =
+      Number(normalized.singlePlane.position || 0.5) +
+      step * this.animation.direction;
 
-      return {
-        ...normalized,
-        enabled: true,
-        singlePlane: {
-          ...normalized.singlePlane,
-          axis: activeAxis,
-          position: nextPosition
-        }
-      };
+    if (animationMode === "loop") {
+      if (nextPosition > 1) nextPosition = 0;
+      if (nextPosition < 0) nextPosition = 1;
+    } else if (nextPosition >= 1) {
+      nextPosition = 1;
+      this.animation.direction = -1;
+    } else if (nextPosition <= 0) {
+      nextPosition = 0;
+      this.animation.direction = 1;
     }
-
-    const activeAxes = AXES.filter(axis => normalized.box?.[axis]?.enabled);
-    const targetAxes = activeAxes.length ? activeAxes : ["x"];
-    const animatedAxes =
-      animationAxis === "auto" ? targetAxes : [animationAxis];
-    const nextBox = { ...normalized.box };
-
-    animatedAxes.forEach(axis => {
-      const current = normalized.box?.[axis] || {
-        enabled: true,
-        range: [0.2, 0.8]
-      };
-      const currentWidth = Math.max(
-        0.08,
-        (current.range?.[1] || 1) - (current.range?.[0] || 0)
-      );
-      const width = Math.min(currentWidth, 0.92);
-      const travel = Math.max(0, 1 - width);
-      if (travel <= 0) return;
-
-      let start = (current.range?.[0] || 0) + step * this.animation.direction;
-      if (animationMode === "loop") {
-        if (start > travel) start = 0;
-        if (start < 0) start = travel;
-      } else if (start >= travel) {
-        start = travel;
-        this.animation.direction = -1;
-      } else if (start <= 0) {
-        start = 0;
-        this.animation.direction = 1;
-      }
-
-      nextBox[axis] = {
-        ...current,
-        enabled: true,
-        range: [start, Math.min(1, start + width)]
-      };
-    });
 
     return {
       ...normalized,
       enabled: true,
-      mode: "box",
-      box: nextBox
+      plane: { ...normalized.plane, custom: false },
+      singlePlane: {
+        ...normalized.singlePlane,
+        axis: activeAxis,
+        position: nextPosition
+      }
     };
   }
 
@@ -565,54 +604,102 @@ export class ClippingTool {
     if (!this.state.enabled || !this._getEffectiveBounds()) return [];
 
     if (this.state.mode === "single-plane") {
+      if (this.state.plane.custom) {
+        const normal = new THREE.Vector3().fromArray(this.state.plane.normal);
+        if (normal.lengthSq() === 0) normal.set(1, 0, 0);
+        normal.normalize();
+        this.planes.custom.normal.copy(normal);
+        this.planes.custom.constant = Number(this.state.plane.constant) || 0;
+        return [{ key: "custom", axis: "custom", plane: this.planes.custom }];
+      }
+
       const { axis, position, direction } = this.state.singlePlane;
       const resolved = this._resolveAxisPosition(axis, position);
       const key = `${axis}${direction === "negative" ? "Max" : "Min"}`;
       const plane = this.planes[key];
       plane.constant = direction === "negative" ? -resolved : resolved;
-      return [
-        {
-          key,
-          axis,
-          plane
-        }
-      ];
+      return [{ key, axis, plane }];
     }
 
-    const entries = [];
-    AXES.forEach(axis => {
-      if (!this.state.box[axis]?.enabled) return;
-      const [minRatio, maxRatio] = this.state.box[axis].range;
-      const minPos = this._resolveAxisPosition(axis, minRatio);
-      const maxPos = this._resolveAxisPosition(axis, maxRatio);
-      this.planes[`${axis}Min`].constant = minPos;
-      this.planes[`${axis}Max`].constant = -maxPos;
-      entries.push({
-        key: `${axis}Min`,
-        axis,
-        plane: this.planes[`${axis}Min`]
-      });
-      entries.push({
-        key: `${axis}Max`,
-        axis,
-        plane: this.planes[`${axis}Max`]
-      });
-    });
-    return entries;
+    if (this.state.mode === "multi-plane") {
+      return this.state.planes
+        .filter(item => item.enabled !== false)
+        .map((item, index) => this._buildPlaneEntryFromConfig(item, index))
+        .filter(Boolean);
+    }
+
+    return [];
   }
 
-  _applyState() {
+  _getDynamicPlane(key) {
+    if (!this.dynamicPlanes.has(key)) {
+      this.dynamicPlanes.set(
+        key,
+        new THREE.Plane(new THREE.Vector3(1, 0, 0), 0)
+      );
+    }
+    return this.dynamicPlanes.get(key);
+  }
+
+  _buildPlaneEntryFromConfig(config, index = 0) {
+    if (!config?.id) return null;
+    const plane = this._getDynamicPlane(config.id);
+    let center = null;
+    let quaternion = null;
+    if (config.custom) {
+      const normal = new THREE.Vector3().fromArray(config.normal || [1, 0, 0]);
+      if (normal.lengthSq() === 0) normal.set(1, 0, 0);
+      normal.normalize();
+      plane.normal.copy(normal);
+      plane.constant = Number(config.constant) || 0;
+      center = new THREE.Vector3().fromArray(config.position || [0, 0, 0]);
+      quaternion = new THREE.Quaternion().fromArray(
+        config.quaternion || [0, 0, 0, 1]
+      );
+    } else {
+      const axis = AXES.includes(config.axis) ? config.axis : "x";
+      const direction =
+        config.direction === "negative" ? "negative" : "positive";
+      const resolved = this._resolveAxisPosition(
+        axis,
+        Number(config.normalizedPosition ?? 0.5)
+      );
+      const sign = direction === "negative" ? 1 : -1;
+      plane.normal.set(0, 0, 0);
+      plane.normal[axis] = sign;
+      plane.constant = direction === "negative" ? -resolved : resolved;
+      center = this._getEffectiveBounds().getCenter(new THREE.Vector3());
+      center[axis] = resolved;
+    }
+    return {
+      key: config.id,
+      planeId: config.id,
+      axis: config.custom ? "custom" : config.axis || "x",
+      plane,
+      center,
+      quaternion,
+      order: index
+    };
+  }
+
+  _applyState({ lightweight = false, skipTransformSync = false } = {}) {
     this.activeBounds = this._resolveActiveBounds();
     const activeEntries = this._buildActivePlaneEntries();
 
     this.renderer.localClippingEnabled = Boolean(this.state.enabled);
     this.renderer.clippingPlanes = [];
-    this.refreshMaterials();
+    this.refreshMaterials({ lightweight });
     this._updateHelpers(activeEntries);
     this._updateCaps(activeEntries);
-    const analysis = this._analyzeMeshes(activeEntries);
-    this.stats = analysis.stats;
-    this._applyFeedback(analysis.meshStates);
+    if (!skipTransformSync) this._syncTransformControls(activeEntries);
+
+    const now = performance.now?.() || Date.now();
+    if (!lightweight || now - this.lastStatsAt >= STATS_THROTTLE_MS) {
+      const analysis = this._analyzeMeshes(activeEntries);
+      this.stats = analysis.stats;
+      this._applyFeedback(analysis.meshStates);
+      this.lastStatsAt = now;
+    }
   }
 
   _analyzeMeshes(activeEntries) {
@@ -624,60 +711,47 @@ export class ClippingTool {
       totalMeshCount: 0
     };
     const meshStates = [];
+    const roots = this._resolveTargetRoots();
 
-    const clipRoot = this._resolveClippingRoot();
-    if (
-      !clipRoot?.traverse ||
-      !this._getEffectiveBounds() ||
-      !this.state.enabled
-    ) {
-      return {
-        stats: result,
-        meshStates
-      };
+    if (!roots.length || !this._getEffectiveBounds() || !this.state.enabled) {
+      return { stats: result, meshStates };
     }
 
-    clipRoot.traverse(obj => {
-      if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
-        return;
-      }
-
-      result.totalMeshCount += 1;
-      const box = new THREE.Box3().setFromObject(obj);
-      if (box.isEmpty()) return;
-
-      let affected = false;
-
-      if (this.state.mode === "single-plane") {
-        const { axis, direction } = this.state.singlePlane;
-        const planeValue = this._resolveAxisPosition(
-          axis,
-          this.state.singlePlane.position
-        );
-        affected =
-          direction === "negative"
-            ? box.max[axis] > planeValue
-            : box.min[axis] < planeValue;
-      } else {
-        affected = AXES.some(axis => {
-          if (!this.state.box[axis]?.enabled) return false;
-          const [minRatio, maxRatio] = this.state.box[axis].range;
-          const minValue = this._resolveAxisPosition(axis, minRatio);
-          const maxValue = this._resolveAxisPosition(axis, maxRatio);
-          return box.min[axis] < minValue || box.max[axis] > maxValue;
-        });
-      }
-
-      if (affected) {
-        result.affectedMeshCount += 1;
-      }
-      meshStates.push({ object: obj, affected });
+    const visited = new Set();
+    roots.forEach(root => {
+      root.traverse?.(obj => {
+        if (
+          !obj?.isMesh ||
+          visited.has(obj) ||
+          obj.userData?.isHelper ||
+          obj.userData?.isMeasure
+        ) {
+          return;
+        }
+        visited.add(obj);
+        result.totalMeshCount += 1;
+        const box = new THREE.Box3().setFromObject(obj);
+        if (box.isEmpty()) return;
+        const affected = this._isBoxAffectedByPlanes(box, activeEntries);
+        if (affected) result.affectedMeshCount += 1;
+        meshStates.push({ object: obj, affected });
+      });
     });
 
-    return {
-      stats: result,
-      meshStates
-    };
+    return { stats: result, meshStates };
+  }
+
+  _isBoxAffectedByPlanes(box, activeEntries) {
+    if (!activeEntries.length) return false;
+    const corners = getBoxCorners(box);
+    return activeEntries.some(entry => {
+      const distances = corners.map(point =>
+        entry.plane.distanceToPoint(point)
+      );
+      return (
+        distances.some(value => value < 0) && distances.some(value => value > 0)
+      );
+    });
   }
 
   _applyFeedback(meshStates = []) {
@@ -686,7 +760,7 @@ export class ClippingTool {
     if (
       !this.state.enabled ||
       this.state.feedbackMode === "none" ||
-      this.state.targetMode === "object"
+      this.state.targets.mode === "objects"
     ) {
       return;
     }
@@ -697,10 +771,7 @@ export class ClippingTool {
         (this.state.feedbackMode === "dim-unaffected" && !affected);
       if (!shouldApply) return;
 
-      const materials = Array.isArray(object.material)
-        ? object.material
-        : [object.material];
-      materials.filter(Boolean).forEach(material => {
+      getMaterials(object).forEach(material => {
         this._storeMaterialFeedbackState(material);
         if (this.state.feedbackMode === "highlight-affected") {
           this._applyHighlightFeedback(material);
@@ -717,6 +788,7 @@ export class ClippingTool {
       material.userData.__clippingFeedbackBase = {
         opacity: material.opacity,
         transparent: material.transparent,
+        depthWrite: material.depthWrite,
         color:
           material.color && typeof material.color.getHex === "function"
             ? material.color.getHex()
@@ -740,9 +812,9 @@ export class ClippingTool {
       if (!material || !base) return;
       material.opacity = base.opacity;
       material.transparent = base.transparent;
-      if (base.color !== null && material.color) {
+      if (base.depthWrite !== undefined) material.depthWrite = base.depthWrite;
+      if (base.color !== null && material.color)
         material.color.setHex(base.color);
-      }
       if (base.emissive !== null && material.emissive) {
         material.emissive.setHex(base.emissive);
       }
@@ -771,6 +843,7 @@ export class ClippingTool {
   _applyDimFeedback(material) {
     material.transparent = true;
     material.opacity = Math.min(Number(material.opacity ?? 1), 0.18);
+    material.depthWrite = false;
     material.needsUpdate = true;
   }
 
@@ -779,11 +852,12 @@ export class ClippingTool {
     helper.renderOrder = 999;
     helper.userData.isHelper = true;
 
+    const color = AXIS_COLORS[entry.axis] || AXIS_COLORS.custom;
     const planeGeometry = new THREE.PlaneGeometry(size, size);
     const planeMaterial = new THREE.MeshBasicMaterial({
-      color: AXIS_COLORS[entry.axis],
+      color,
       transparent: true,
-      opacity: 0.12,
+      opacity: CLIPPING_HELPER_OPACITY,
       side: THREE.DoubleSide,
       depthTest: false,
       depthWrite: false,
@@ -797,39 +871,42 @@ export class ClippingTool {
     planeMesh.userData.isHelper = true;
     helper.add(planeMesh);
 
-    const outlineGeometry = new THREE.EdgesGeometry(planeGeometry);
-    const outlineMaterial = new THREE.LineBasicMaterial({
-      color: AXIS_COLORS[entry.axis],
-      transparent: true,
-      opacity: 0.92,
-      depthTest: false,
-      depthWrite: false,
-      toneMapped: false
-    });
-    const outline = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(planeGeometry),
+      new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.92,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false
+      })
+    );
     outline.renderOrder = 998;
     outline.userData.isHelper = true;
     helper.add(outline);
 
-    const hitGeometry = new THREE.PlaneGeometry(size * 0.28, size * 0.28);
-    const hitMaterial = new THREE.MeshBasicMaterial({
-      color: AXIS_COLORS[entry.axis],
-      transparent: true,
-      opacity: 0.02,
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -6,
-      polygonOffsetUnits: -6
-    });
-    const hitMesh = new THREE.Mesh(hitGeometry, hitMaterial);
+    const hitMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(size * 0.28, size * 0.28),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.02,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -6,
+        polygonOffsetUnits: -6
+      })
+    );
     hitMesh.renderOrder = 1000;
     hitMesh.userData.isHelper = true;
     hitMesh.userData.clippingEntry = {
       key: entry.key,
-      axis: entry.axis
+      axis: entry.axis,
+      planeId: entry.planeId || ""
     };
     helper.add(hitMesh);
     helper.userData.planeMesh = planeMesh;
@@ -838,69 +915,367 @@ export class ClippingTool {
     return helper;
   }
 
-  _createCap(entry, dimensions) {
-    const { width, height } = this._getPlaneDimensions(entry.axis, dimensions);
-    const geometry = new THREE.PlaneGeometry(width, height);
-    const material = new THREE.MeshBasicMaterial({
-      color: AXIS_COLORS[entry.axis],
-      transparent: true,
-      opacity: 0.14,
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2
+  _createCap(entry, activeEntries, candidates, planeIndex) {
+    const group = new THREE.Group();
+    group.renderOrder = SECTION_CAP_RENDER_ORDER;
+    group.userData.isHelper = true;
+    group.userData.isClippingCap = true;
+
+    const stride = Math.max(candidates.length * 3 + 4, 4);
+    const planeOrderOffset = Math.max(0, planeIndex) * stride;
+    const otherPlanes = activeEntries
+      .filter(item => item.key !== entry.key)
+      .map(item => item.plane);
+
+    candidates
+      .filter(candidate => this._isCandidateAffectedByEntry(candidate, entry))
+      .forEach((candidate, index) => {
+        const renderOrder =
+          SECTION_CAP_RENDER_ORDER + planeOrderOffset + index * 3;
+        const stencilGroup = this._createStencilCapMask(
+          candidate,
+          entry,
+          renderOrder
+        );
+        group.add(stencilGroup);
+
+        const capSurface = this._createCapSurface(
+          candidate,
+          entry,
+          otherPlanes,
+          renderOrder + 1
+        );
+        group.add(capSurface);
+      });
+
+    return group;
+  }
+
+  _collectCapCandidates() {
+    const roots = this._resolveTargetRoots();
+    const candidates = [];
+    const visited = new Set();
+    roots.forEach(root => {
+      root?.traverse?.(obj => {
+        if (
+          !obj?.isMesh ||
+          visited.has(obj) ||
+          obj.userData?.isHelper ||
+          obj.userData?.isMeasure ||
+          obj.visible === false
+        ) {
+          return;
+        }
+        const materials = getMaterials(obj);
+        if (!materials.length) return;
+        obj.updateWorldMatrix?.(true, false);
+        const bounds = new THREE.Box3().setFromObject(obj);
+        if (bounds.isEmpty()) return;
+        visited.add(obj);
+        candidates.push({
+          object: obj,
+          material: materials[0],
+          bounds
+        });
+      });
     });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.renderOrder = 995;
+    return candidates.slice(0, SECTION_CAP_MAX_MESHES);
+  }
+
+  _getCapDimensions(entry, bounds) {
+    const diagonal = Math.max(
+      bounds?.getSize?.(new THREE.Vector3()).length() || 1,
+      1
+    );
+    const minSize = Math.max(diagonal * 0.04, 0.25);
+    if (!bounds || bounds.isEmpty?.()) {
+      const fallbackSize = Math.max(diagonal, minSize);
+      return {
+        width: fallbackSize,
+        height: fallbackSize,
+        sizeKey: `${fallbackSize.toFixed(3)}:${fallbackSize.toFixed(3)}`
+      };
+    }
+
+    const normal = this._getEntryAxisNormal(entry);
+    const center = this._getCapPlaneCenter(entry, bounds);
+    const { tangent, bitangent } = this._getPlaneBasis(normal);
+    const corners = getBoxCorners(bounds);
+    const projected = corners.map(point => {
+      const delta = point.clone().sub(center);
+      return {
+        u: delta.dot(tangent),
+        v: delta.dot(bitangent)
+      };
+    });
+    const minU = Math.min(...projected.map(item => item.u));
+    const maxU = Math.max(...projected.map(item => item.u));
+    const minV = Math.min(...projected.map(item => item.v));
+    const maxV = Math.max(...projected.map(item => item.v));
+    const width = Math.max((maxU - minU) * SECTION_CAP_PADDING, minSize);
+    const height = Math.max((maxV - minV) * SECTION_CAP_PADDING, minSize);
+    return {
+      width,
+      height,
+      sizeKey: `${width.toFixed(3)}:${height.toFixed(3)}`
+    };
+  }
+
+  _isCandidateAffectedByEntry(candidate, entry) {
+    return Boolean(
+      candidate?.bounds &&
+      entry?.plane &&
+      this._isBoxAffectedByPlanes(candidate.bounds, [entry])
+    );
+  }
+
+  _getPlaneBasis(normal) {
+    const safeNormal = normal.clone();
+    if (safeNormal.lengthSq() === 0) safeNormal.set(0, 0, 1);
+    safeNormal.normalize();
+    const reference =
+      Math.abs(safeNormal.y) < 0.92
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(1, 0, 0);
+    const tangent = new THREE.Vector3()
+      .crossVectors(reference, safeNormal)
+      .normalize();
+    const bitangent = new THREE.Vector3()
+      .crossVectors(safeNormal, tangent)
+      .normalize();
+    return { tangent, bitangent };
+  }
+
+  _getCapPlaneCenter(entry, bounds) {
+    const normal = this._getEntryAxisNormal(entry);
+    const center =
+      bounds?.getCenter?.(new THREE.Vector3()) || this._getEntryCenter(entry);
+    const distance = entry.plane.distanceToPoint(center);
+    return center.addScaledVector(normal, -distance);
+  }
+
+  _syncCapGeometry(cap, entry, bounds) {
+    if (!cap) return;
+    const { width, height, sizeKey } = this._getCapDimensions(entry, bounds);
+    if (cap.userData.capSizeKey === sizeKey) return;
+
+    const nextGeometry = new THREE.PlaneGeometry(width, height);
+    cap.geometry?.dispose?.();
+    cap.geometry = nextGeometry;
+    cap.userData.capSizeKey = sizeKey;
+
+    const edges = cap.userData.edges;
+    if (edges) {
+      edges.geometry?.dispose?.();
+      edges.geometry = new THREE.EdgesGeometry(nextGeometry);
+    }
+  }
+
+  _createStencilMaterial(entry, side, stencilOp) {
+    const material = new THREE.MeshBasicMaterial({
+      depthWrite: false,
+      depthTest: false,
+      colorWrite: false,
+      side
+    });
+    material.clippingPlanes = [entry.plane];
+    material.stencilWrite = true;
+    material.stencilFunc = THREE.AlwaysStencilFunc;
+    material.stencilFail = stencilOp;
+    material.stencilZFail = stencilOp;
+    material.stencilZPass = stencilOp;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  _createWorldStencilMesh(source, material, renderOrder) {
+    const mesh = new THREE.Mesh(source.geometry, material);
+    mesh.renderOrder = renderOrder;
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(source.matrixWorld);
+    mesh.matrixWorld.copy(source.matrixWorld);
+    mesh.frustumCulled = false;
     mesh.userData.isHelper = true;
     mesh.userData.isClippingCap = true;
-
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(geometry),
-      new THREE.LineBasicMaterial({
-        color: AXIS_COLORS[entry.axis],
-        transparent: true,
-        opacity: 0.48,
-        depthTest: false,
-        depthWrite: false,
-        toneMapped: false
-      })
-    );
-    edges.renderOrder = 996;
-    edges.userData.isHelper = true;
-    edges.userData.isClippingCap = true;
-    mesh.add(edges);
-
+    mesh.userData.isSectionCapStencil = true;
+    mesh.userData.sourceObjectUuid = source.uuid;
     return mesh;
   }
 
-  _getPlaneDimensions(axis, dimensions) {
-    if (axis === "x") {
-      return { width: dimensions.z, height: dimensions.y };
+  _createStencilCapMask(candidate, entry, renderOrder) {
+    const group = new THREE.Group();
+    group.userData.isHelper = true;
+    group.userData.isClippingCap = true;
+    group.userData.isSectionCapStencilGroup = true;
+    group.userData.sourceObjectUuid = candidate.object.uuid;
+    group.userData.capEntryKey = entry.key;
+
+    const backMaterial = this._createStencilMaterial(
+      entry,
+      THREE.BackSide,
+      THREE.IncrementWrapStencilOp
+    );
+    const frontMaterial = this._createStencilMaterial(
+      entry,
+      THREE.FrontSide,
+      THREE.DecrementWrapStencilOp
+    );
+    group.add(
+      this._createWorldStencilMesh(candidate.object, backMaterial, renderOrder),
+      this._createWorldStencilMesh(candidate.object, frontMaterial, renderOrder)
+    );
+    return group;
+  }
+
+  _createCapMaterial(sourceMaterial, clippingPlanes = []) {
+    const color = new THREE.Color(SECTION_CAP_FALLBACK_COLOR);
+    if (sourceMaterial?.color?.isColor) {
+      color.copy(sourceMaterial.color);
+    } else if (sourceMaterial?.emissive?.isColor) {
+      color.copy(sourceMaterial.emissive);
     }
-    if (axis === "y") {
-      return { width: dimensions.x, height: dimensions.z };
+
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      toneMapped: false
+    });
+    material.clippingPlanes = clippingPlanes;
+    material.clipIntersection = false;
+    material.stencilWrite = true;
+    material.stencilRef = 0;
+    material.stencilFunc = THREE.NotEqualStencilFunc;
+    material.stencilFail = THREE.ReplaceStencilOp;
+    material.stencilZFail = THREE.ReplaceStencilOp;
+    material.stencilZPass = THREE.ReplaceStencilOp;
+    material.alphaTest = 0;
+    material.userData.isSectionCapMaterial = true;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  _createCapSurface(candidate, entry, clippingPlanes, renderOrder) {
+    const { width, height, sizeKey } = this._getCapDimensions(
+      entry,
+      candidate.bounds
+    );
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const material = this._createCapMaterial(
+      candidate.material,
+      clippingPlanes
+    );
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.renderOrder = renderOrder;
+    mesh.frustumCulled = false;
+    mesh.userData.isHelper = true;
+    mesh.userData.isClippingCap = true;
+    mesh.userData.isSectionCapSurface = true;
+    mesh.userData.sourceObjectUuid = candidate.object.uuid;
+    mesh.userData.capEntryKey = entry.key;
+    mesh.userData.capSizeKey = sizeKey;
+    mesh.userData.sourceBounds = candidate.bounds.clone();
+    this._updateCapSurfaceTransform(mesh, entry, candidate.bounds);
+    return mesh;
+  }
+
+  _updateCapSurfaceTransform(
+    mesh,
+    entry,
+    bounds,
+    offset = CLIPPING_CAP_OFFSET
+  ) {
+    if (!mesh) return;
+    const center = this._getCapPlaneCenter(entry, bounds);
+    const normal = this._getEntryAxisNormal(entry);
+    if (offset) center.addScaledVector(normal, offset);
+    mesh.position.copy(center);
+    if (entry.quaternion) {
+      mesh.quaternion.copy(entry.quaternion);
+    } else {
+      mesh.quaternion.setFromUnitVectors(LOCAL_PLANE_NORMAL, normal);
     }
-    return { width: dimensions.x, height: dimensions.y };
+    mesh.updateMatrixWorld(true);
+  }
+
+  _syncCapGroup(group, entry, activeEntries, candidates) {
+    if (!group) return;
+    const candidateMap = new Map(
+      candidates.map(item => [item.object.uuid, item])
+    );
+    const otherPlanes = activeEntries
+      .filter(item => item.key !== entry.key)
+      .map(item => item.plane);
+
+    group.traverse(child => {
+      const candidate = candidateMap.get(child.userData?.sourceObjectUuid);
+      if (!candidate) return;
+
+      if (child.userData?.isSectionCapStencil) {
+        child.visible = this._isCandidateAffectedByEntry(candidate, entry);
+        child.matrix.copy(candidate.object.matrixWorld);
+        child.matrixWorld.copy(candidate.object.matrixWorld);
+        child.material.clippingPlanes = [entry.plane];
+        child.material.needsUpdate = true;
+      }
+
+      if (child.userData?.isSectionCapSurface) {
+        child.visible = this._isCandidateAffectedByEntry(candidate, entry);
+        child.material.clippingPlanes = otherPlanes;
+        child.material.needsUpdate = true;
+        this._syncCapGeometry(child, entry, candidate.bounds);
+        this._updateCapSurfaceTransform(child, entry, candidate.bounds);
+      }
+    });
+  }
+
+  _buildCapSignature(activeEntries, candidates) {
+    return [
+      this.state.mode,
+      this.state.targets.mode,
+      this.state.targets.objectUuids.join("|"),
+      activeEntries
+        .map(entry => {
+          const affected = candidates
+            .filter(candidate =>
+              this._isCandidateAffectedByEntry(candidate, entry)
+            )
+            .map(candidate => candidate.object.uuid)
+            .join(",");
+          return `${entry.key}[${affected}]`;
+        })
+        .join("|"),
+      candidates
+        .map(item => {
+          const material = item.material;
+          const color =
+            material?.color && typeof material.color.getHexString === "function"
+              ? material.color.getHexString()
+              : "";
+          return `${item.object.uuid}:${material?.uuid || ""}:${color}`;
+        })
+        .join("|")
+    ].join("::");
   }
 
   _updatePlaneTransform(mesh, entry, offset = 0) {
     if (!mesh || !this._getEffectiveBounds()) return;
     const center = this._getEntryCenter(entry);
     const normal = this._getEntryAxisNormal(entry);
-    if (offset) {
-      center.addScaledVector(normal, offset);
-    }
+    if (offset) center.addScaledVector(normal, offset);
     mesh.position.copy(center);
-    if (entry.axis === "x") {
-      mesh.rotation.set(0, Math.PI / 2, 0);
-    } else if (entry.axis === "y") {
-      mesh.rotation.set(-Math.PI / 2, 0, 0);
+    if (entry.quaternion) {
+      mesh.quaternion.copy(entry.quaternion);
+    } else if (entry.key === "custom") {
+      mesh.quaternion.fromArray(this.state.plane.quaternion);
     } else {
-      mesh.rotation.set(0, 0, 0);
+      mesh.quaternion.setFromUnitVectors(LOCAL_PLANE_NORMAL, normal);
     }
     mesh.updateMatrixWorld(true);
   }
@@ -911,31 +1286,70 @@ export class ClippingTool {
       this.state.capEnabled &&
       this._getEffectiveBounds() &&
       activeEntries.length > 0;
-
     if (!shouldShow) {
       this._removeCaps();
       return;
     }
 
-    const dimensions = this._getEffectiveBounds().getSize(new THREE.Vector3());
-    const activeKeys = new Set(activeEntries.map(item => item.key));
+    const candidates = this._collectCapCandidates();
+    if (!candidates.length) {
+      this._removeCaps();
+      return;
+    }
 
-    activeEntries.forEach(entry => {
+    const signature = this._buildCapSignature(activeEntries, candidates);
+    if (signature !== this.capSignature) {
+      this._removeCaps();
+      this.capSignature = signature;
+    }
+
+    const activeKeys = new Set(activeEntries.map(item => item.key));
+    activeEntries.forEach((entry, index) => {
       if (!this.caps[entry.key]) {
-        this.caps[entry.key] = this._createCap(entry, dimensions);
+        this.caps[entry.key] = this._createCap(
+          entry,
+          activeEntries,
+          candidates,
+          index
+        );
         this.scene.add(this.caps[entry.key]);
       }
-      const capMesh = this.caps[entry.key];
-      this._updatePlaneTransform(capMesh, entry, CLIPPING_CAP_OFFSET);
-      capMesh.visible = true;
+      this._syncCapGroup(
+        this.caps[entry.key],
+        entry,
+        activeEntries,
+        candidates
+      );
+      this.caps[entry.key].visible = true;
     });
 
     Object.keys(this.caps).forEach(key => {
       if (activeKeys.has(key)) return;
       this.scene.remove(this.caps[key]);
-      disposeHelper(this.caps[key]);
+      disposeSectionCapGroup(this.caps[key]);
       this.caps[key] = null;
     });
+  }
+
+  _reuseAttachedSinglePlaneHelper(activeEntries, activeKeys) {
+    if (
+      this.state.mode !== "single-plane" ||
+      !this.transformHelper ||
+      this.helpers.custom
+    ) {
+      return;
+    }
+
+    const customEntry = activeEntries.find(item => item.key === "custom");
+    if (!customEntry) return;
+
+    const previousKey = Object.keys(this.helpers).find(
+      key => this.helpers[key] === this.transformHelper && !activeKeys.has(key)
+    );
+    if (!previousKey) return;
+
+    this.helpers.custom = this.transformHelper;
+    delete this.helpers[previousKey];
   }
 
   _updateHelpers(activeEntries) {
@@ -954,6 +1368,7 @@ export class ClippingTool {
     this._getEffectiveBounds().getSize(size);
     const helperSize = Math.max(size.x, size.y, size.z) * 1.3;
     const activeKeys = new Set(activeEntries.map(item => item.key));
+    this._reuseAttachedSinglePlaneHelper(activeEntries, activeKeys);
 
     activeEntries.forEach(entry => {
       if (!this.helpers[entry.key]) {
@@ -964,23 +1379,44 @@ export class ClippingTool {
       helper.visible = true;
       helper.userData.hitMesh.userData.clippingEntry = {
         key: entry.key,
-        axis: entry.axis
+        axis: entry.axis,
+        planeId: entry.planeId || ""
       };
+      this._syncHelperVisualOpacity(helper);
       this._updatePlaneTransform(helper, entry, CLIPPING_HELPER_OFFSET);
       helper.updateMatrixWorld?.(true);
     });
 
     Object.keys(this.helpers).forEach(key => {
       if (activeKeys.has(key)) return;
+      if (this.transformHelper === this.helpers[key]) {
+        this.transformControls?.detach?.();
+        this.transformHelper = null;
+      }
       this.scene.remove(this.helpers[key]);
       disposeHelper(this.helpers[key]);
       this.helpers[key] = null;
     });
   }
 
+  _syncHelperVisualOpacity(helper) {
+    const material = helper?.userData?.planeMesh?.material;
+    if (!material) return;
+    const opacity = this.state.capEnabled
+      ? CLIPPING_HELPER_CAP_OPACITY
+      : CLIPPING_HELPER_OPACITY;
+    if (Math.abs(Number(material.opacity ?? 0) - opacity) < 0.001) return;
+    material.opacity = opacity;
+    material.needsUpdate = true;
+  }
+
   _removeHelpers() {
     Object.keys(this.helpers).forEach(key => {
       if (!this.helpers[key]) return;
+      if (this.transformHelper === this.helpers[key]) {
+        this.transformControls?.detach?.();
+        this.transformHelper = null;
+      }
       this.scene.remove(this.helpers[key]);
       disposeHelper(this.helpers[key]);
       this.helpers[key] = null;
@@ -991,9 +1427,10 @@ export class ClippingTool {
     Object.keys(this.caps).forEach(key => {
       if (!this.caps[key]) return;
       this.scene.remove(this.caps[key]);
-      disposeHelper(this.caps[key]);
+      disposeSectionCapGroup(this.caps[key]);
       this.caps[key] = null;
     });
+    this.capSignature = "";
   }
 
   _getActivePlanes() {
@@ -1002,22 +1439,27 @@ export class ClippingTool {
       : [];
   }
 
-  _resolveClippingRoot() {
-    if (this.state.targetMode !== "object") {
-      return this.root || this.scene;
+  _resolveTargetRoots() {
+    if (this.state.targets.mode !== "objects") {
+      return [this.root || this.scene].filter(Boolean);
     }
-    return this._findObjectByUUID(this.state.targetObjectUuid) || null;
+    const roots = this.state.targets.objectUuids
+      .map(uuid => this.objectIndex.get(uuid) || this._findObjectByUUID(uuid))
+      .filter(Boolean);
+    return roots.length ? roots : [];
+  }
+
+  _resolveClippingRoot() {
+    const roots = this._resolveTargetRoots();
+    if (this.state.targets.mode === "objects") return roots[0] || null;
+    return roots[0] || this.root || this.scene;
   }
 
   _resolveActiveBounds() {
-    const clippingRoot = this._resolveClippingRoot();
-    if (
-      this.state.targetMode === "object" &&
-      clippingRoot &&
-      clippingRoot !== this.root &&
-      clippingRoot !== this.scene
-    ) {
-      const box = new THREE.Box3().setFromObject(clippingRoot);
+    const roots = this._resolveTargetRoots();
+    if (this.state.targets.mode === "objects" && roots.length) {
+      const box = new THREE.Box3();
+      roots.forEach(root => box.expandByObject(root));
       if (!box.isEmpty()) return box;
     }
     return this.bounds?.clone?.() || this.bounds || null;
@@ -1031,10 +1473,9 @@ export class ClippingTool {
     if (!uuid || !this.root?.traverse) return null;
     let found = null;
     this.root.traverse(obj => {
-      if (!found && obj?.uuid === uuid) {
-        found = obj;
-      }
+      if (!found && obj?.uuid === uuid) found = obj;
     });
+    if (found?.uuid) this.objectIndex.set(found.uuid, found);
     return found;
   }
 
@@ -1047,21 +1488,82 @@ export class ClippingTool {
     return false;
   }
 
-  _ensureObjectMaterialOverrides(targetRoot) {
+  _isDescendantOfAny(obj, targetRoots = []) {
+    return targetRoots.some(root => this._isDescendantOf(obj, root));
+  }
+
+  _getMaterialSignature() {
+    if (!this.state.enabled || this.state.targets.mode !== "objects") {
+      return "scene";
+    }
+    return [
+      "objects",
+      this.state.targets.objectUuids.join("|"),
+      Number(this.state.nonTargetOpacity || NON_TARGET_OPACITY).toFixed(3)
+    ].join(":");
+  }
+
+  _ensureObjectMaterialOverrides(targetRoot, targetRoots) {
     targetRoot?.traverse?.(obj => {
       if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
         return;
       }
-      if (this.materialOverrides.has(obj)) {
-        return;
+      const isTarget = this._isDescendantOfAny(obj, targetRoots);
+
+      if (!this.materialOverrides.has(obj)) {
+        const originalMaterial = obj.material;
+        const overrideMaterial = Array.isArray(originalMaterial)
+          ? originalMaterial.map(item => item?.clone?.() || item)
+          : originalMaterial?.clone?.() || originalMaterial;
+        this.materialOverrides.set(obj, originalMaterial);
+        obj.material = overrideMaterial;
       }
-      const originalMaterial = obj.material;
-      const overrideMaterial = Array.isArray(originalMaterial)
-        ? originalMaterial.map(item => item?.clone?.() || item)
-        : originalMaterial?.clone?.() || originalMaterial;
-      this.materialOverrides.set(obj, originalMaterial);
-      obj.material = overrideMaterial;
+
+      getMaterials(obj).forEach(material => {
+        material.transparent = !isTarget;
+        material.opacity = isTarget
+          ? 1
+          : Number(this.state.nonTargetOpacity || NON_TARGET_OPACITY);
+        material.depthWrite = Boolean(isTarget);
+        material.clippingPlanes = null;
+        material.needsUpdate = true;
+      });
     });
+  }
+
+  _applyTargetOpaqueMaterials(targetRoots) {
+    targetRoots.forEach(root => {
+      root?.traverse?.(obj => {
+        if (!obj?.isMesh || obj.userData?.isHelper || obj.userData?.isMeasure) {
+          return;
+        }
+        getMaterials(obj).forEach(material => {
+          if (!material) return;
+          if (!this.targetOpaqueMaterials.has(material)) {
+            this.targetOpaqueMaterials.set(material, {
+              opacity: material.opacity,
+              transparent: material.transparent,
+              depthWrite: material.depthWrite
+            });
+          }
+          material.opacity = 1;
+          material.transparent = false;
+          if (material.depthWrite !== undefined) material.depthWrite = true;
+          material.needsUpdate = true;
+        });
+      });
+    });
+  }
+
+  _restoreTargetOpaqueMaterials() {
+    this.targetOpaqueMaterials.forEach((base, material) => {
+      if (!material || !base) return;
+      material.opacity = base.opacity;
+      material.transparent = base.transparent;
+      if (base.depthWrite !== undefined) material.depthWrite = base.depthWrite;
+      material.needsUpdate = true;
+    });
+    this.targetOpaqueMaterials.clear();
   }
 
   _restoreMaterialOverrides() {
@@ -1076,6 +1578,92 @@ export class ClippingTool {
       }
     });
     this.materialOverrides.clear();
+  }
+
+  _scheduleTransformCommit() {
+    if (!this.transformHelper || this.syncingTransform) return;
+    if (this.transformRafId) return;
+    this.transformRafId = requestAnimationFrame(() => {
+      this.transformRafId = 0;
+      this._commitTransformHelper();
+    });
+  }
+
+  _commitTransformHelper() {
+    if (!this.transformHelper || this.syncingTransform) return;
+    this.stopAnimation();
+    this.transformHelper.updateMatrixWorld(true);
+    const position = this.transformHelper.position.clone();
+    const quaternion = this.transformHelper.quaternion.clone();
+    const normal = LOCAL_PLANE_NORMAL.clone()
+      .applyQuaternion(quaternion)
+      .normalize();
+    const constant = -normal.dot(position);
+    const entry =
+      this.transformHelper.userData?.hitMesh?.userData?.clippingEntry;
+    if (this.state.mode === "multi-plane" && entry?.planeId) {
+      this.state = normalizeClippingState({
+        ...this.state,
+        enabled: true,
+        activePlaneId: entry.planeId,
+        planes: this.state.planes.map(item =>
+          item.id === entry.planeId
+            ? {
+                ...item,
+                custom: true,
+                normal: normal.toArray(),
+                constant,
+                position: position.toArray(),
+                quaternion: quaternion.toArray()
+              }
+            : item
+        )
+      });
+      this._applyState({ lightweight: true, skipTransformSync: true });
+      this._emitChange("plane-transform");
+      return;
+    }
+
+    this.state = normalizeClippingState({
+      ...this.state,
+      enabled: true,
+      mode: "single-plane",
+      plane: {
+        ...this.state.plane,
+        custom: true,
+        normal: normal.toArray(),
+        constant,
+        position: position.toArray(),
+        quaternion: quaternion.toArray()
+      }
+    });
+    this._applyState({ lightweight: true, skipTransformSync: true });
+    this._emitChange("transform");
+  }
+
+  _syncTransformControls(activeEntries = null) {
+    if (!this.transformControls) return;
+    this.transformControls.setMode(this.state.editMode || "translate");
+    const entries = activeEntries || this._buildActivePlaneEntries();
+    const entry =
+      this.state.mode === "single-plane" && this.state.helpersVisible
+        ? entries[0]
+        : this.state.mode === "multi-plane" && this.state.helpersVisible
+          ? entries.find(item => item.planeId === this.state.activePlaneId) ||
+            entries[0]
+          : null;
+    const helper = entry ? this.helpers[entry.key] : null;
+    if (!helper || !this.state.enabled) {
+      this.transformControls.detach?.();
+      this.transformHelper = null;
+      return;
+    }
+    if (this.transformHelper === helper) return;
+    this.syncingTransform = true;
+    this.transformControls.detach?.();
+    this.transformControls.attach(helper);
+    this.transformHelper = helper;
+    this.syncingTransform = false;
   }
 
   _emitChange(source = "external") {

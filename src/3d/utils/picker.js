@@ -39,12 +39,13 @@ export class ObjectPicker {
     this.sceneTreeDirty = true;
 
     this._onMouseMove = this._onMouseMove.bind(this);
-    this._onClick = this._onClick.bind(this);
+    this._onPointerDown = this._onPointerDown.bind(this);
     this._markContainerRectDirty = this._markContainerRectDirty.bind(this);
 
     // 回调
     this.onHover = null;
     this.onSelect = null;
+    this.shouldIgnoreEvent = null;
   }
 
   /**
@@ -56,7 +57,7 @@ export class ObjectPicker {
     this.refreshPickTargets();
     this.containerRectDirty = true;
     this.container.addEventListener("mousemove", this._onMouseMove);
-    this.container.addEventListener("click", this._onClick);
+    this.container.addEventListener("pointerdown", this._onPointerDown);
     window.addEventListener("resize", this._markContainerRectDirty, {
       passive: true
     });
@@ -70,7 +71,7 @@ export class ObjectPicker {
     if (!this.enabled) return;
     this.enabled = false;
     this.container.removeEventListener("mousemove", this._onMouseMove);
-    this.container.removeEventListener("click", this._onClick);
+    this.container.removeEventListener("pointerdown", this._onPointerDown);
     if (this.hoverRaf) {
       cancelAnimationFrame(this.hoverRaf);
       this.hoverRaf = 0;
@@ -235,6 +236,7 @@ export class ObjectPicker {
 
   _onMouseMove(event) {
     if (!this.enabled) return;
+    if (event.defaultPrevented || this.shouldIgnoreEvent?.(event)) return;
     this.lastHoverPoint = { x: event.clientX, y: event.clientY };
     if (this.hoverRaf) return;
     this.hoverRaf = requestAnimationFrame(() => {
@@ -300,8 +302,10 @@ export class ObjectPicker {
     });
   }
 
-  _onClick(event) {
+  _onPointerDown(event) {
     if (!this.enabled) return;
+    if (event.button !== 0) return;
+    if (event.defaultPrevented || this.shouldIgnoreEvent?.(event)) return;
     if (this.pickTargetsDirty) this.refreshPickTargets();
     if (!this.pickTargets?.length) return;
 

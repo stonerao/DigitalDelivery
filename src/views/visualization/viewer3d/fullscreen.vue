@@ -11,7 +11,6 @@ import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
 import { getConfig } from "@/config";
-import { ThreeModelViewer } from "@/3d";
 import { getHandoverKksList } from "@/api/handoverData";
 import {
   getHandoverDocumentDetail,
@@ -42,24 +41,11 @@ import { useDdLinkageStoreHook } from "@/store/modules/ddLinkage";
 import { useViewer3dRuntimeStoreHook } from "@/store/modules/viewer3dRuntime";
 import { useViewer3dProjectStoreHook } from "@/store/modules/viewer3dProject";
 import ViewerTopbar from "./toolbars/ViewerTopbar.vue";
-import ViewerBottomToolbar from "./toolbars/ViewerBottomToolbar.vue";
-import ClippingPanel from "./panels/ClippingPanel.vue";
-import ObjectInfoPanel from "./panels/ObjectInfoPanel.vue";
-import SceneSchemePanel from "./panels/SceneSchemePanel.vue";
-import DevicePanel from "./panels/DevicePanel.vue";
-import NavigationPanel from "./panels/NavigationPanel.vue";
-import SceneAnchorPanel from "./panels/SceneAnchorPanel.vue";
-import SceneStylePanel from "./panels/SceneStylePanel.vue";
-import MeasurementPanel from "./panels/MeasurementPanel.vue";
-import RuntimeLinkagePanel from "./panels/RuntimeLinkagePanel.vue";
-import AssetGroupPanel from "./panels/AssetGroupPanel.vue";
 import {
   applyClippingPreset,
   CLIPPING_AXIS_OPTIONS,
   CLIPPING_DIRECTION_OPTIONS,
-  CLIPPING_FEEDBACK_OPTIONS,
   CLIPPING_MODE_OPTIONS,
-  CLIPPING_PRESET_OPTIONS,
   CLIPPING_TARGET_OPTIONS,
   cloneClippingState,
   createDefaultClippingState,
@@ -173,6 +159,16 @@ import {
   patchProjectPackage
 } from "./services/projectPackageService";
 import { useViewerToolbarState } from "./services/useViewerToolbarState";
+import Viewer3DWorkspace from "./components/fullscreen/Viewer3DWorkspace.vue";
+import Viewer2DWorkspace from "./components/fullscreen/Viewer2DWorkspace.vue";
+import SceneSettingsDialog from "./components/fullscreen/dialogs/SceneSettingsDialog.vue";
+import ModelPickerDialog from "./components/fullscreen/dialogs/ModelPickerDialog.vue";
+import NavigationNodeDialog from "./components/fullscreen/dialogs/NavigationNodeDialog.vue";
+import DocumentBindingDialog from "./components/fullscreen/dialogs/DocumentBindingDialog.vue";
+import PropertyBindingDialog from "./components/fullscreen/dialogs/PropertyBindingDialog.vue";
+import AnchorEditorDialog from "./components/fullscreen/dialogs/AnchorEditorDialog.vue";
+import AnchorDetailDialog from "./components/fullscreen/dialogs/AnchorDetailDialog.vue";
+import CameraVideoDialog from "./components/fullscreen/dialogs/CameraVideoDialog.vue";
 
 defineOptions({
   name: "Viewer3DFullscreen"
@@ -1276,6 +1272,18 @@ const runtimeAssetGroups = computed(() =>
 );
 
 const viewerRef = ref(null);
+function handleViewerRefChange(value) {
+  viewerRef.value = value;
+}
+
+function handleLayerTreeRefChange(value) {
+  layerTreeRef.value = value;
+}
+
+function handleVideoElementRefChange(value) {
+  videoElementRef.value = value;
+}
+
 watch(
   viewerRef,
   value => {
@@ -1313,6 +1321,30 @@ const videoLoading = ref(false);
 const videoErrorText = ref("");
 let clippingPersistTimer = null;
 let onFullscreenKeydown = null;
+const shortcutEditableTags = new Set(["input", "textarea", "select"]);
+const measurementShortcutMap = {
+  1: { mode: "distance", label: "距离测量" },
+  2: { mode: "angle", label: "角度测量" },
+  3: { mode: "area", label: "面积测量" },
+  4: { mode: "polyline", label: "折线测量" }
+};
+const clippingShortcutMap = {
+  x: { presetId: "section-x", label: "X 平面剖切" },
+  y: { presetId: "section-y", label: "Y 平面剖切" },
+  z: { presetId: "section-z", label: "Z 平面剖切" },
+  m: { presetId: "multi-slab-x", label: "双平面夹层剖切" }
+};
+const displayModeShortcutMap = {
+  1: { mode: "all", label: "显示全部" },
+  2: { mode: "business", label: "按业务绑定显示" },
+  3: { mode: "system", label: "按系统显示" },
+  4: { mode: "selection", label: "仅显示当前选择" }
+};
+const materialThemeShortcutMap = {
+  8: { theme: "wireframe", label: "线框模式" },
+  9: { theme: "basic", label: "实体模式" },
+  0: { theme: "original", label: "渲染模式" }
+};
 const clippingAnimationPlaying = ref(false);
 const clippingAnimationSpeed = ref(0.6);
 const clippingAnimationMode = ref("ping-pong");
@@ -1331,8 +1363,6 @@ const clippingAnimationAxisOptions = [
 const clippingModeOptions = CLIPPING_MODE_OPTIONS;
 const clippingAxisOptions = CLIPPING_AXIS_OPTIONS;
 const clippingDirectionOptions = CLIPPING_DIRECTION_OPTIONS;
-const clippingFeedbackOptions = CLIPPING_FEEDBACK_OPTIONS;
-const clippingPresetOptions = CLIPPING_PRESET_OPTIONS;
 const clippingTargetOptions = CLIPPING_TARGET_OPTIONS;
 const clippingSummaryText = computed(() =>
   getActiveClippingSummary(runtimeClippingState.value)
@@ -1988,12 +2018,6 @@ function persistClippingState() {
   });
 }
 
-function persistClippingPresets() {
-  patchSceneProjectPackage({
-    clippingPresets: clippingPresets.value
-  });
-}
-
 function buildProjectInfoPayload() {
   const serializedSceneModels = serializeSceneModels(sceneModels.value, {
     mapMetadata: item => ({
@@ -2443,12 +2467,21 @@ function setMaterialTheme(theme) {
   viewerAdapter.setMaterialTheme(theme);
 }
 
+function areSceneOverlaysSuppressed() {
+  return Boolean(enableClipping.value || runtimeClippingState.value?.enabled);
+}
+
 function syncSceneAnchors() {
   if (!viewerAdapter.isReady()) return;
-  viewerAdapter.setAnchors(renderableAnchors.value);
-  viewerAdapter.setAnchorsVisible(anchorMarkersVisible.value);
-  viewerAdapter.setCameraAnchors(renderableCameraAnchors.value);
-  viewerAdapter.setCameraAnchorsVisible(cameraMarkersVisible.value);
+  const suppressed = areSceneOverlaysSuppressed();
+  viewerAdapter.setAnchors(suppressed ? [] : renderableAnchors.value);
+  viewerAdapter.setAnchorsVisible(anchorMarkersVisible.value && !suppressed);
+  viewerAdapter.setCameraAnchors(
+    suppressed ? [] : renderableCameraAnchors.value
+  );
+  viewerAdapter.setCameraAnchorsVisible(
+    cameraMarkersVisible.value && !suppressed
+  );
 }
 
 function buildNodeIdByKks(kks) {
@@ -2836,8 +2869,9 @@ function syncLayerTreeSelection(keys = allLayerLeafKeys.value) {
 
 function syncMeasurementPoints() {
   if (!viewerAdapter.isReady()) return;
-  viewerAdapter.setLinkedPointsVisible(pointMarkersVisible.value);
-  if (!pointMarkersVisible.value) {
+  const visible = pointMarkersVisible.value && !areSceneOverlaysSuppressed();
+  viewerAdapter.setLinkedPointsVisible(visible);
+  if (!visible) {
     viewerAdapter.clearLinkedPoints();
     return;
   }
@@ -3047,6 +3081,68 @@ function syncClippingStateFromViewer(payload = {}) {
   }
 }
 
+function getSelectedClippingTarget() {
+  const selected = selectedObjectInfo.value || {};
+  const uuid = selected.objectUuid || selected.uuid || "";
+  const name = selected.name || selected.objectName || uuid;
+  return { uuid, name };
+}
+
+function withSingleObjectClippingPlane(nextState) {
+  if (nextState?.mode !== "single-plane") return nextState;
+  const firstPlaneId = nextState?.planes?.[0]?.id || nextState?.plane?.id;
+  return {
+    ...nextState,
+    singlePlane: {
+      ...(nextState.singlePlane || {}),
+      position: 1,
+      direction: "positive"
+    },
+    plane: {
+      ...(nextState.plane || {}),
+      custom: false,
+      normalizedPosition: 1,
+      direction: "positive"
+    },
+    planes: Array.isArray(nextState.planes)
+      ? nextState.planes.map(item =>
+          item.id === firstPlaneId
+            ? {
+                ...item,
+                custom: false,
+                normalizedPosition: 1,
+                direction: "positive"
+              }
+            : item
+        )
+      : nextState.planes
+  };
+}
+
+function applyPickModeClippingTarget(nextState) {
+  if (activeTool.value !== "pick") return nextState;
+  const currentTargets = nextState?.targets || {};
+  const currentUuids = Array.isArray(currentTargets.objectUuids)
+    ? currentTargets.objectUuids
+    : [];
+  if (currentTargets.mode === "objects" && currentUuids.length > 1) {
+    return nextState;
+  }
+
+  const { uuid, name } = getSelectedClippingTarget();
+  return withSingleObjectClippingPlane({
+    ...nextState,
+    targetMode: "object",
+    targetObjectUuid: uuid,
+    targetObjectName: name,
+    targets: {
+      mode: "objects",
+      objectUuids: uuid ? [uuid] : [],
+      objectNames: uuid ? [name || uuid] : []
+    }
+  });
+}
+
 function toggleClipping() {
   if (enableClipping.value) {
     stopClippingAnimation({ persist: false });
@@ -3056,7 +3152,9 @@ function toggleClipping() {
         ...runtimeClippingState.value,
         enabled: false
       }
-    : ensureVisibleClippingState(runtimeClippingState.value);
+    : applyPickModeClippingTarget(
+        ensureVisibleClippingState(runtimeClippingState.value)
+      );
   updateClippingState(nextState);
   message(nextState.enabled ? "已开启剖切模式" : "已关闭剖切模式", {
     type: "info"
@@ -3070,44 +3168,14 @@ function onClippingStateChange(nextState) {
 
 function onClippingPresetChange(presetId) {
   stopClippingAnimation({ persist: false });
-  const nextState = applyClippingPreset(runtimeClippingState.value, presetId);
+  const nextState = applyPickModeClippingTarget(
+    applyClippingPreset(runtimeClippingState.value, presetId)
+  );
   updateClippingState(nextState);
   const presetLabel =
-    clippingPresetOptions.find(item => item.value === presetId)?.label ||
-    presetId;
-  message(`已应用剖切预设：${presetLabel}`, { type: "success" });
-}
-
-function saveCurrentClippingPreset() {
-  const nextIndex = clippingPresets.value.length + 1;
-  const item = {
-    id: `clip-preset-${Date.now()}`,
-    name: `剖切预设 ${nextIndex}`,
-    state: cloneClippingState(runtimeClippingState.value),
-    createdAt: Date.now()
-  };
-  const next = [item, ...clippingPresets.value];
-  projectStore.setClippingPresets(next);
-  persistClippingPresets();
-  message(`已保存剖切预设：${item.name}`, { type: "success" });
-}
-
-function applySavedClippingPreset(item) {
-  if (!item?.state) return;
-  stopClippingAnimation({ persist: false });
-  updateClippingState({
-    ...cloneClippingState(item.state),
-    enabled: true
-  });
-  message(`已应用剖切预设：${item.name}`, { type: "success" });
-}
-
-function removeSavedClippingPreset(id) {
-  const target = clippingPresets.value.find(item => item.id === id);
-  const next = clippingPresets.value.filter(item => item.id !== id);
-  projectStore.setClippingPresets(next);
-  persistClippingPresets();
-  message(`已删除剖切预设：${target?.name || id}`, { type: "success" });
+    Object.values(clippingShortcutMap).find(item => item.presetId === presetId)
+      ?.label || presetId;
+  message(`已切换剖切：${presetLabel}`, { type: "success" });
 }
 
 function resetClipping() {
@@ -4030,16 +4098,30 @@ async function onObjectSelect(info) {
     selectTreeNodeByUUID
   });
   const clippingTargetUuid = info?.objectUuid || info?.uuid || "";
+  const currentTargetUuid =
+    runtimeClippingState.value.targets?.objectUuids?.[0] ||
+    runtimeClippingState.value.targetObjectUuid ||
+    "";
   if (
     clippingTargetUuid &&
-    runtimeClippingState.value.targetMode === "object"
+    runtimeClippingState.value.targetMode === "object" &&
+    (runtimeClippingState.value.targets?.objectUuids || []).length <= 1
   ) {
-    updateClippingState({
+    const shouldResetPlane = clippingTargetUuid !== currentTargetUuid;
+    const nextState = {
       ...runtimeClippingState.value,
       targetMode: "object",
       targetObjectUuid: clippingTargetUuid,
-      targetObjectName: info.name || ""
-    });
+      targetObjectName: info.name || "",
+      targets: {
+        mode: "objects",
+        objectUuids: [clippingTargetUuid],
+        objectNames: [info.name || clippingTargetUuid]
+      }
+    };
+    updateClippingState(
+      shouldResetPlane ? withSingleObjectClippingPlane(nextState) : nextState
+    );
   }
 }
 
@@ -4125,12 +4207,94 @@ function goBack() {
   }
 }
 
+function isEditableShortcutTarget(target) {
+  const tag = target?.tagName?.toLowerCase?.() || "";
+  return shortcutEditableTags.has(tag) || Boolean(target?.isContentEditable);
+}
+
+function applyMaterialThemeShortcut(theme, label) {
+  setMaterialTheme(theme);
+  message(`已切换视图模式：${label}`, { type: "info" });
+}
+
+function handleFullscreenShortcut(event) {
+  if (isEditableShortcutTarget(event.target || document.activeElement)) return;
+
+  const key = event.key?.toLowerCase?.() || "";
+  if (key === "escape" && positionPickingState.value.active) {
+    cancelPositionPicking();
+    return;
+  }
+
+  if (roamingEnabled.value && key !== "r") return;
+
+  if (key === "home") {
+    event.preventDefault();
+    resetView();
+    return;
+  }
+
+  if (key === "r" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    toggleRoaming();
+    return;
+  }
+
+  const measurementShortcut = measurementShortcutMap[key];
+  if (
+    measurementShortcut &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey
+  ) {
+    event.preventDefault();
+    onToolChange("measure");
+    setMeasurementMode(measurementShortcut.mode);
+    message(`已切换测量工具：${measurementShortcut.label}`, { type: "info" });
+    return;
+  }
+
+  const materialShortcut = materialThemeShortcutMap[key];
+  if (materialShortcut && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    applyMaterialThemeShortcut(materialShortcut.theme, materialShortcut.label);
+    return;
+  }
+
+  const clippingShortcut = clippingShortcutMap[key];
+  if (clippingShortcut && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    onClippingPresetChange(clippingShortcut.presetId);
+    return;
+  }
+
+  if (key === "k" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    toggleClipping();
+    return;
+  }
+
+  if (key === "t" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    toggleTransparent();
+    return;
+  }
+
+  if (key === "h" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    void applyDisplayMode("selection");
+    return;
+  }
+
+  const displayShortcut = displayModeShortcutMap[key];
+  if (displayShortcut && event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    void applyDisplayMode(displayShortcut.mode);
+  }
+}
+
 onMounted(async () => {
-  onFullscreenKeydown = event => {
-    if (event.key === "Escape" && positionPickingState.value.active) {
-      cancelPositionPicking();
-    }
-  };
+  onFullscreenKeydown = handleFullscreenShortcut;
   window.addEventListener("keydown", onFullscreenKeydown);
   await loadAvailableModels();
   await reloadProjectSceneContext();
@@ -4261,6 +4425,14 @@ watch(
     syncMeasurementPointsOnWatcher({
       syncMeasurementPoints
     });
+  }
+);
+
+watch(
+  () => Boolean(enableClipping.value || runtimeClippingState.value?.enabled),
+  () => {
+    syncSceneAnchors();
+    syncMeasurementPoints();
   }
 );
 
@@ -4431,244 +4603,54 @@ onBeforeUnmount(() => {
 
     <div class="dd-canvas">
       <div class="relative h-full w-full">
-        <ThreeModelViewer
-          ref="viewerRef"
-          :model-url="viewerModelUrl"
+        <Viewer3DWorkspace
+          :viewer-model-url="viewerModelUrl"
           :model-name="modelName"
-          :scene-models="viewerSceneModels"
+          :viewer-scene-models="viewerSceneModels"
           :transparent="transparent"
-          :use-basic-material="true"
           :quality="quality"
           :interaction-mode="interactionMode"
           :ifc-wasm-path="ifcWasmPath"
           :show-stats="showStats"
           :enable-clipping="enableClipping"
-          @loaded="handleViewerLoaded"
-          @object-select="onObjectSelect"
-          @measure-change="handleMeasurementChange"
-          @measure-complete="handleMeasurementChange"
-          @scene-anchor-click="handleSceneAnchorClick"
-          @clipping-change="handleViewerClippingChange"
-        />
-
-        <div v-show="showSidePanel" class="dd-side-panel">
-          <el-card shadow="never" class="h-full body-no-padding">
-            <el-tabs
-              v-model="activeSideTab"
-              tab-position="right"
-              class="dd-side-tabs h-full"
-            >
-              <el-tab-pane label="导航" name="navigation">
-                <NavigationPanel
-                  ref="layerTreeRef"
-                  :navigation-tree-data="navigationTreeData"
-                  :current-nav-node-key="currentNavNodeKey"
-                  :selected-system-node-id="selectedSystemNodeId"
-                  :selected-quick-kks="selectedQuickKks"
-                  :scene-device-system-options="sceneDeviceSystemOptions"
-                  :scene-device-kks-options="sceneDeviceKksOptions"
-                  :layer-tree-data="layerTreeData"
-                  :layer-checked-keys="layerCheckedKeys"
-                  :display-mode="displayMode"
-                  :display-mode-text="displayModeText"
-                  @create-root-node="openCreateNavigationNodeDialog()"
-                  @navigation-node-click="handleNavigationNodeClick"
-                  @navigation-node-contextmenu="handleNavTreeContextMenu"
-                  @update:selected-system-node-id="
-                    selectedSystemNodeId = $event
-                  "
-                  @update:selected-quick-kks="selectedQuickKks = $event"
-                  @locate-system="locateSystem()"
-                  @locate-by-kks="locateByKks()"
-                  @apply-display-mode="applyDisplayMode"
-                  @layer-tree-check="handleLayerTreeCheck"
-                />
-
-                <div class="mt-3 px-1">
-                  <SceneSchemePanel
-                    :scheme-name="schemeName"
-                    :scene-schemes="sceneSchemes"
-                    :format-scheme-time="formatSchemeTime"
-                    @update:scheme-name="schemeName = $event"
-                    @save-scheme="saveSceneScheme"
-                    @apply-scheme="applySceneScheme"
-                    @remove-scheme="removeSceneScheme"
-                  />
-                </div>
-              </el-tab-pane>
-
-              <el-tab-pane label="设备" name="devices">
-                <DevicePanel
-                  :device-keyword="deviceKeyword"
-                  :filtered-scene-devices="filteredSceneDevices"
-                  :selected-device-uuid="selectedDeviceUuid"
-                  @update:device-keyword="deviceKeyword = $event"
-                  @locate-device="locateDevice"
-                  @isolate-device="isolateDevice"
-                />
-              </el-tab-pane>
-
-              <el-tab-pane label="点位" name="anchors">
-                <SceneAnchorPanel
-                  title="场景点位"
-                  kind="anchor"
-                  :items="anchors"
-                  :selected-id="selectedAnchorId"
-                  :visible="anchorMarkersVisible"
-                  empty-text="当前模型暂无点位"
-                  @toggle-visible="anchorMarkersVisible = $event"
-                  @add-item="openCreateAnchorDialog('anchor')"
-                  @select-item="selectSceneAnchor($event, 'anchor')"
-                  @edit-item="openEditAnchorDialog($event, 'anchor')"
-                  @remove-item="removeSceneAnchor($event, 'anchor')"
-                />
-              </el-tab-pane>
-
-              <el-tab-pane label="摄像头" name="cameras">
-                <SceneAnchorPanel
-                  title="摄像头点位"
-                  kind="camera"
-                  :items="cameraAnchors"
-                  :selected-id="selectedCameraId"
-                  :visible="cameraMarkersVisible"
-                  empty-text="当前模型暂无摄像头点位"
-                  @toggle-visible="cameraMarkersVisible = $event"
-                  @add-item="openCreateAnchorDialog('camera')"
-                  @select-item="selectSceneAnchor($event, 'camera')"
-                  @edit-item="openEditAnchorDialog($event, 'camera')"
-                  @remove-item="removeSceneAnchor($event, 'camera')"
-                />
-              </el-tab-pane>
-
-              <el-tab-pane label="测量" name="measurements">
-                <MeasurementPanel
-                  :measurement-records="measurementRecords"
-                  :measurement-mode="measurementMode"
-                  :measurement-mode-options="measurementModeOptions"
-                  @update:measurement-mode="setMeasurementMode"
-                  @focus-record="focusMeasurementRecord"
-                  @toggle-record-visible="toggleMeasurementRecordVisible"
-                  @remove-record="removeMeasurementRecord"
-                  @clear-records="clearMeasurements"
-                  @export-records="exportMeasurements"
-                />
-              </el-tab-pane>
-
-              <el-tab-pane label="资产" name="assets">
-                <AssetGroupPanel
-                  :scene-models="sceneModels"
-                  :active-model-id="activeSceneModelId"
-                  :groups="runtimeAssetGroups"
-                  :available-model-options="selectableModelOptions"
-                  :loading-model-options="loadingModelOptions"
-                  :quality="quality"
-                  :quality-options="qualityModeOptions"
-                  :material-theme="materialTheme"
-                  :lod-levels="sceneManifest.lodLevels || []"
-                  :active-lod-id="selectedLodId"
-                  @add-model="openModelPicker"
-                  @select-model="activeSceneModelId = $event"
-                  @remove-model="removeSceneModel"
-                  @refresh-model-options="loadAvailableModels(true)"
-                  @toggle-group="toggleAssetGroupVisibility"
-                  @update:quality="quality = $event"
-                  @update:material-theme="setMaterialTheme"
-                  @apply-lod="applyLodLevel"
-                  @clear-lod="clearLodOverride"
-                />
-              </el-tab-pane>
-
-              <el-tab-pane label="联动" name="runtime">
-                <RuntimeLinkagePanel
-                  :realtime-state="realtimeState"
-                  :script-state="scriptState"
-                  :backend-state="backendState"
-                  :runtime-logs="runtimeLogs"
-                  @restart-realtime="restartRealtime"
-                  @run-manual-trigger="runManualScriptTrigger"
-                  @send-backend-command="sendBackendCommand"
-                  @clear-logs="clearRuntimeLogs"
-                />
-              </el-tab-pane>
-            </el-tabs>
-          </el-card>
-        </div>
-
-        <el-dialog
-          v-model="settingsDialogVisible"
-          title="设置"
-          width="880px"
-          class="dd-settings-dialog"
-          destroy-on-close
-        >
-          <SceneStylePanel
-            :anchor-style="getAnchorStyleDefault('anchor')"
-            :camera-style="getAnchorStyleDefault('camera')"
-            @save-style="handleSavePublicStyle"
-            @export-data="handleExportSceneAnchorData"
-            @import-data="handleImportSceneAnchorData"
-          />
-        </el-dialog>
-
-        <el-dialog
-          v-model="modelPickerVisible"
-          title="添加模型到场景"
-          width="560px"
-          destroy-on-close
-        >
-          <el-form label-width="108px">
-            <el-form-item label="挂载节点">
-              <el-select
-                v-model="modelPickerNodeId"
-                filterable
-                clearable
-                class="w-full"
-                placeholder="可选，选择模型挂载节点"
-              >
-                <el-option
-                  v-for="item in systemNodeSelectOptions"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="模型列表">
-              <el-select
-                v-model="modelPickerSelection"
-                multiple
-                filterable
-                class="w-full"
-                :loading="loadingModelOptions"
-                placeholder="请选择要添加的模型"
-              >
-                <el-option
-                  v-for="item in selectableModelOptions"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value"
-                />
-              </el-select>
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="modelPickerVisible = false">取消</el-button>
-            <el-button type="primary" @click="confirmAddModels">添加</el-button>
-          </template>
-        </el-dialog>
-
-        <ViewerBottomToolbar
           :tool-options="toolOptions"
           :active-tool="activeTool"
           :roaming-enabled="roamingEnabled"
-          :transparent="transparent"
-          :enable-clipping="enableClipping"
           :preset-views="presetViews"
           :bookmarks="bookmarks"
           :measurement-mode="measurementMode"
           :measurement-mode-options="measurementModeOptions"
           :projection-mode="projectionMode"
           :selected-count="selectedCount"
+          :show-side-panel="showSidePanel"
+          :runtime-clipping-state="runtimeClippingState"
+          :clipping-summary-text="clippingSummaryText"
+          :clipping-stats="clippingStats"
+          :clipping-target-options="clippingTargetOptions"
+          :selected-object-info="selectedObjectInfo"
+          :clipping-animation-playing="clippingAnimationPlaying"
+          :clipping-animation-speed="clippingAnimationSpeed"
+          :clipping-animation-mode="clippingAnimationMode"
+          :clipping-animation-mode-options="clippingAnimationModeOptions"
+          :clipping-animation-axis="clippingAnimationAxis"
+          :clipping-animation-axis-options="clippingAnimationAxisOptions"
+          :clipping-mode-options="clippingModeOptions"
+          :clipping-axis-options="clippingAxisOptions"
+          :clipping-direction-options="clippingDirectionOptions"
+          :show-object-panel="showObjectPanel"
+          :selected-scene-device="selectedSceneDevice"
+          :selected-kks-detail="selectedKksDetail"
+          :selected-kks-detail-loading="selectedKksDetailLoading"
+          :selected-kks-detail-error="selectedKksDetailError"
+          :current-measurement-points="currentMeasurementPoints"
+          :point-markers-visible="pointMarkersVisible"
+          @viewer-ref-change="handleViewerRefChange"
+          @loaded="handleViewerLoaded"
+          @object-select="onObjectSelect"
+          @measure-change="handleMeasurementChange"
+          @measure-complete="handleMeasurementChange"
+          @scene-anchor-click="handleSceneAnchorClick"
+          @clipping-change="handleViewerClippingChange"
           @update:active-tool="activeTool = $event"
           @update:measurement-mode="setMeasurementMode"
           @tool-change="onToolChange"
@@ -4685,52 +4667,126 @@ onBeforeUnmount(() => {
           @clear-measurements="clearMeasurements"
           @export-measurements="exportMeasurements"
           @set-preset-view="setPresetView"
-        />
-
-        <ClippingPanel
-          :enable-clipping="enableClipping"
-          :show-side-panel="showSidePanel"
-          :clipping-state="runtimeClippingState"
-          :clipping-summary="clippingSummaryText"
-          :clipping-stats="clippingStats"
-          :target-options="clippingTargetOptions"
-          :selected-object-info="selectedObjectInfo"
-          :animation-playing="clippingAnimationPlaying"
-          :animation-speed="clippingAnimationSpeed"
-          :animation-mode="clippingAnimationMode"
-          :animation-mode-options="clippingAnimationModeOptions"
-          :animation-axis="clippingAnimationAxis"
-          :animation-axis-options="clippingAnimationAxisOptions"
-          :mode-options="clippingModeOptions"
-          :axis-options="clippingAxisOptions"
-          :direction-options="clippingDirectionOptions"
-          :feedback-options="clippingFeedbackOptions"
-          :preset-options="clippingPresetOptions"
-          :saved-presets="clippingPresets"
           @update:clipping-state="onClippingStateChange"
-          @apply-preset="onClippingPresetChange"
-          @save-preset="saveCurrentClippingPreset"
-          @apply-saved-preset="applySavedClippingPreset"
-          @remove-saved-preset="removeSavedClippingPreset"
           @toggle-animation="toggleClippingAnimation"
           @update:animation-speed="clippingAnimationSpeed = $event"
           @update:animation-mode="clippingAnimationMode = $event"
           @update:animation-axis="clippingAnimationAxis = $event"
-          @reset="resetClipping"
+          @reset-clipping="resetClipping"
+          @close-object-panel="closeObjectPanel"
+          @update:point-markers-visible="pointMarkersVisible = $event"
         />
 
-        <ObjectInfoPanel
-          :visible="showObjectPanel"
-          :selected-object-info="selectedObjectInfo"
-          :selected-scene-device="selectedSceneDevice"
-          :selected-bound-documents="selectedSceneDevice?.boundDocuments || []"
-          :selected-kks-detail="selectedKksDetail"
-          :selected-kks-detail-loading="selectedKksDetailLoading"
-          :selected-kks-detail-error="selectedKksDetailError"
-          :current-measurement-points="currentMeasurementPoints"
-          :point-markers-visible="pointMarkersVisible"
-          @close="closeObjectPanel"
-          @update:point-markers-visible="pointMarkersVisible = $event"
+        <Viewer2DWorkspace
+          :show-side-panel="showSidePanel"
+          :active-side-tab="activeSideTab"
+          :navigation-tree-data="navigationTreeData"
+          :current-nav-node-key="currentNavNodeKey"
+          :selected-system-node-id="selectedSystemNodeId"
+          :selected-quick-kks="selectedQuickKks"
+          :scene-device-system-options="sceneDeviceSystemOptions"
+          :scene-device-kks-options="sceneDeviceKksOptions"
+          :layer-tree-data="layerTreeData"
+          :layer-checked-keys="layerCheckedKeys"
+          :display-mode="displayMode"
+          :display-mode-text="displayModeText"
+          :scheme-name="schemeName"
+          :scene-schemes="sceneSchemes"
+          :filtered-scene-devices="filteredSceneDevices"
+          :device-keyword="deviceKeyword"
+          :selected-device-uuid="selectedDeviceUuid"
+          :anchors="anchors"
+          :selected-anchor-id="selectedAnchorId"
+          :anchor-markers-visible="anchorMarkersVisible"
+          :camera-anchors="cameraAnchors"
+          :selected-camera-id="selectedCameraId"
+          :camera-markers-visible="cameraMarkersVisible"
+          :measurement-records="measurementRecords"
+          :measurement-mode="measurementMode"
+          :measurement-mode-options="measurementModeOptions"
+          :scene-models="sceneModels"
+          :active-scene-model-id="activeSceneModelId"
+          :runtime-asset-groups="runtimeAssetGroups"
+          :selectable-model-options="selectableModelOptions"
+          :loading-model-options="loadingModelOptions"
+          :quality="quality"
+          :quality-mode-options="qualityModeOptions"
+          :material-theme="materialTheme"
+          :lod-levels="sceneManifest.lodLevels || []"
+          :selected-lod-id="selectedLodId"
+          :realtime-state="realtimeState"
+          :script-state="scriptState"
+          :backend-state="backendState"
+          :runtime-logs="runtimeLogs"
+          :format-scheme-time="formatSchemeTime"
+          @layer-tree-ref-change="handleLayerTreeRefChange"
+          @update:active-side-tab="activeSideTab = $event"
+          @create-root-node="openCreateNavigationNodeDialog()"
+          @navigation-node-click="handleNavigationNodeClick"
+          @navigation-node-contextmenu="handleNavTreeContextMenu"
+          @update:selected-system-node-id="selectedSystemNodeId = $event"
+          @update:selected-quick-kks="selectedQuickKks = $event"
+          @locate-system="locateSystem()"
+          @locate-by-kks="locateByKks()"
+          @apply-display-mode="applyDisplayMode"
+          @layer-tree-check="handleLayerTreeCheck"
+          @update:scheme-name="schemeName = $event"
+          @save-scheme="saveSceneScheme"
+          @apply-scheme="applySceneScheme"
+          @remove-scheme="removeSceneScheme"
+          @update:device-keyword="deviceKeyword = $event"
+          @locate-device="locateDevice"
+          @isolate-device="isolateDevice"
+          @update:anchor-markers-visible="anchorMarkersVisible = $event"
+          @add-anchor="openCreateAnchorDialog('anchor')"
+          @select-anchor="selectSceneAnchor($event, 'anchor')"
+          @edit-anchor="openEditAnchorDialog($event, 'anchor')"
+          @remove-anchor="removeSceneAnchor($event, 'anchor')"
+          @update:camera-markers-visible="cameraMarkersVisible = $event"
+          @add-camera="openCreateAnchorDialog('camera')"
+          @select-camera="openCameraVideo"
+          @edit-camera="openEditAnchorDialog($event, 'camera')"
+          @remove-camera="removeSceneAnchor($event, 'camera')"
+          @update:measurement-mode="setMeasurementMode"
+          @focus-record="focusMeasurementRecord"
+          @toggle-record-visible="toggleMeasurementRecordVisible"
+          @remove-record="removeMeasurementRecord"
+          @clear-records="clearMeasurements"
+          @export-records="exportMeasurements"
+          @add-model="openModelPicker"
+          @select-model="activeSceneModelId = $event"
+          @remove-model="removeSceneModel"
+          @refresh-model-options="loadAvailableModels(true)"
+          @toggle-group="toggleAssetGroupVisibility"
+          @update:quality="quality = $event"
+          @update:material-theme="setMaterialTheme"
+          @apply-lod="applyLodLevel"
+          @clear-lod="clearLodOverride"
+          @restart-realtime="restartRealtime"
+          @run-manual-trigger="runManualScriptTrigger"
+          @send-backend-command="sendBackendCommand"
+          @clear-logs="clearRuntimeLogs"
+        />
+
+        <SceneSettingsDialog
+          v-model="settingsDialogVisible"
+          :anchor-style="getAnchorStyleDefault('anchor')"
+          :camera-style="getAnchorStyleDefault('camera')"
+          @save-style="handleSavePublicStyle"
+          @export-data="handleExportSceneAnchorData"
+          @import-data="handleImportSceneAnchorData"
+        />
+
+        <ModelPickerDialog
+          v-model="modelPickerVisible"
+          :model-picker-node-id="modelPickerNodeId"
+          :model-picker-selection="modelPickerSelection"
+          :system-node-select-options="systemNodeSelectOptions"
+          :selectable-model-options="selectableModelOptions"
+          :loading-model-options="loadingModelOptions"
+          @update:model-picker-node-id="modelPickerNodeId = $event"
+          @update:model-picker-selection="modelPickerSelection = $event"
+          @confirm="confirmAddModels"
         />
 
         <!-- 导航树右键菜单 -->
@@ -4779,594 +4835,92 @@ onBeforeUnmount(() => {
           </template>
         </div>
 
-        <el-dialog
+        <NavigationNodeDialog
           v-model="navNodeDialogVisible"
-          :title="
-            navNodeDialogMode === 'create' ? '新增导航节点' : '重命名导航节点'
-          "
-          width="420px"
-          destroy-on-close
-        >
-          <el-form label-width="88px">
-            <el-form-item label="节点名称">
-              <el-input
-                v-model="navNodeForm.label"
-                placeholder="请输入导航节点名称"
-              />
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="navNodeDialogVisible = false">取消</el-button>
-            <el-button type="primary" @click="confirmNavigationNodeDialog">
-              确定
-            </el-button>
-          </template>
-        </el-dialog>
+          :mode="navNodeDialogMode"
+          :label="navNodeForm.label"
+          @update:label="navNodeForm.label = $event"
+          @confirm="confirmNavigationNodeDialog"
+        />
 
-        <el-dialog
+        <DocumentBindingDialog
           v-model="documentDialogVisible"
           :title="documentDialogTitle"
-          width="80vw"
-          destroy-on-close
-        >
-          <el-form label-width="90px" class="pr-4">
-            <el-form-item :label="documentDialogCurrentLabel">
-              <el-input
-                :model-value="documentDialogTargetLabel || '-'"
-                readonly
-              />
-            </el-form-item>
-            <el-form-item label="已绑文档">
-              <div class="w-full text-sm text-gray-500">
-                当前共绑定 {{ currentDocumentBoundCount }} 个文档
-              </div>
-            </el-form-item>
-            <template v-if="documentDialogMode === 'bind'">
-              <el-form-item label="文档搜索">
-                <el-input
-                  v-model="documentDialogKeyword"
-                  clearable
-                  placeholder="搜索文档名称"
-                  @input="searchDocumentOptions(documentDialogKeyword)"
-                />
-              </el-form-item>
-              <el-form-item label="文档列表">
-                <div class="w-full">
-                  <el-table
-                    ref="documentDialogTableRef"
-                    v-loading="documentDialogLoading"
-                    :data="documentDialogRecords"
-                    row-key="id"
-                    height="45vh"
-                    @selection-change="handleDocumentSelectionChange"
-                  >
-                    <el-table-column type="selection" width="52" />
-                    <el-table-column
-                      prop="name"
-                      label="文档名称"
-                      min-width="260"
-                      show-overflow-tooltip
-                    />
-                    <el-table-column prop="type" label="类型" width="120" />
-                    <el-table-column
-                      prop="updatedAt"
-                      label="更新时间"
-                      min-width="180"
-                    />
-                  </el-table>
-                  <div class="mt-3 flex justify-end">
-                    <el-pagination
-                      background
-                      layout="total, sizes, prev, pager, next"
-                      :total="documentDialogPagination.total"
-                      :current-page="documentDialogPagination.page"
-                      :page-size="documentDialogPagination.size"
-                      :page-sizes="[20, 50, 100]"
-                      @size-change="onDocumentSizeChange"
-                      @current-change="onDocumentPageChange"
-                    />
-                  </div>
-                </div>
-              </el-form-item>
-            </template>
-            <el-form-item
-              :label="documentDialogMode === 'view' ? '绑定结果' : '已选文件'"
-            >
-              <div class="w-full">
-                <el-table
-                  :data="documentDialogSelectedDocuments"
-                  row-key="id"
-                  height="28vh"
-                  :empty-text="documentDialogEmptyText"
-                >
-                  <el-table-column
-                    prop="name"
-                    label="文档名称"
-                    min-width="260"
-                    show-overflow-tooltip
-                  />
-                  <el-table-column prop="type" label="类型" width="120" />
-                  <el-table-column
-                    prop="updatedAt"
-                    label="更新时间"
-                    min-width="180"
-                  />
-                </el-table>
-              </div>
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="documentDialogVisible = false">
-              {{ documentDialogMode === "view" ? "关闭" : "取消" }}
-            </el-button>
-            <el-button
-              v-if="documentDialogMode === 'bind'"
-              type="primary"
-              @click="confirmDocumentDialog"
-            >
-              确定
-            </el-button>
-          </template>
-        </el-dialog>
+          :current-label="documentDialogCurrentLabel"
+          :target-label="documentDialogTargetLabel"
+          :current-bound-count="currentDocumentBoundCount"
+          :mode="documentDialogMode"
+          :keyword="documentDialogKeyword"
+          :loading="documentDialogLoading"
+          :records="documentDialogRecords"
+          :pagination="documentDialogPagination"
+          :selected-documents="documentDialogSelectedDocuments"
+          :empty-text="documentDialogEmptyText"
+          @update:keyword="documentDialogKeyword = $event"
+          @search="searchDocumentOptions(documentDialogKeyword)"
+          @selection-change="handleDocumentSelectionChange"
+          @table-ref-change="documentDialogTableRef = $event"
+          @size-change="onDocumentSizeChange"
+          @page-change="onDocumentPageChange"
+          @confirm="confirmDocumentDialog"
+        />
 
-        <!-- 业务数据绑定弹窗 -->
-        <el-dialog
+        <PropertyBindingDialog
           v-model="propDialogVisible"
           :title="propDialogTitle"
-          width="80vw"
-          destroy-on-close
-        >
-          <el-form label-width="90px" class="pr-4">
-            <el-form-item label="业务数据">
-              <el-input
-                v-model="propertyBindingKeyword"
-                clearable
-                placeholder="搜索数据移交中的 KKS / 名称 / 系统"
-                @input="searchPropertyBindingRecords(propertyBindingKeyword)"
-              />
-            </el-form-item>
-            <el-form-item label="当前构件">
-              <el-input :model-value="currentPropertyTargetName" readonly />
-            </el-form-item>
-            <el-form-item label="KKS 编码">
-              <el-input :model-value="propEditForm.kks || '-'" readonly />
-            </el-form-item>
-            <el-form-item label="KKS 列表">
-              <div class="w-full">
-                <el-table
-                  v-loading="propertyBindingLoading"
-                  :data="propertyBindingRecords"
-                  height="50vh"
-                  highlight-current-row
-                  @row-click="handlePropertyBindingRowClick"
-                >
-                  <el-table-column prop="kks" label="KKS编码" min-width="150" />
-                  <el-table-column prop="name" label="名称" min-width="180" />
-                  <el-table-column prop="type" label="类型" width="100" />
-                  <el-table-column
-                    prop="systemName"
-                    label="所属系统"
-                    min-width="160"
-                    show-overflow-tooltip
-                  />
-                  <el-table-column prop="status" label="状态" width="100" />
-                </el-table>
-                <div class="mt-3 flex justify-end">
-                  <el-pagination
-                    background
-                    layout="total, sizes, prev, pager, next"
-                    :total="propertyBindingPagination.total"
-                    :current-page="propertyBindingPagination.page"
-                    :page-size="propertyBindingPagination.size"
-                    :page-sizes="[20, 50, 100]"
-                    @size-change="onPropertyBindingSizeChange"
-                    @current-change="onPropertyBindingPageChange"
-                  />
-                </div>
-              </div>
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="propDialogVisible = false">取消</el-button>
-            <el-button
-              type="primary"
-              :disabled="!selectedPropertyBindingKks"
-              @click="confirmPropDialog"
-              >确定</el-button
-            >
-          </template>
-        </el-dialog>
+          :keyword="propertyBindingKeyword"
+          :current-target-name="currentPropertyTargetName"
+          :current-kks="propEditForm.kks || '-'"
+          :loading="propertyBindingLoading"
+          :records="propertyBindingRecords"
+          :pagination="propertyBindingPagination"
+          :selected-kks="selectedPropertyBindingKks"
+          @update:keyword="propertyBindingKeyword = $event"
+          @search="searchPropertyBindingRecords(propertyBindingKeyword)"
+          @row-click="handlePropertyBindingRowClick"
+          @size-change="onPropertyBindingSizeChange"
+          @page-change="onPropertyBindingPageChange"
+          @confirm="confirmPropDialog"
+        />
 
-        <el-dialog
-          v-if="anchorDialogVisible && !anchorDialogMinimized"
-          v-model="anchorDialogVisible"
+        <AnchorEditorDialog
+          v-model:visible="anchorDialogVisible"
+          v-model:form="anchorForm"
+          :minimized="anchorDialogMinimized"
           :title="anchorDialogTitle"
-          width="560px"
-          :close-on-click-modal="true"
-          class="dd-anchor-dialog"
-          destroy-on-close
+          :kind="anchorDialogKind"
+          :scene-object-options="sceneObjectOptions"
+          :device-kks-options="deviceKksOptions"
+          :anchor-measurement-options="anchorMeasurementOptions"
+          :camera-type-options="cameraTypeOptions"
+          :scene-anchor-type-options="sceneAnchorTypeOptions"
+          :camera-stream-type-options="cameraStreamTypeOptions"
+          :camera-window-mode-options="cameraWindowModeOptions"
+          :anchor-binding-type-options="anchorBindingTypeOptions"
+          :position-picking-active="positionPickingState.active"
+          :picked-position-text="pickedPositionText"
           @closed="handleAnchorDialogClosed"
-        >
-          <el-form label-width="108px" class="pr-4">
-            <el-form-item
-              :label="anchorDialogKind === 'camera' ? '名称' : '点位名称'"
-            >
-              <el-input
-                v-model="anchorForm.name"
-                :placeholder="
-                  anchorDialogKind === 'camera'
-                    ? '摄像头点位名称'
-                    : '请输入点位名称'
-                "
-              />
-            </el-form-item>
-            <el-form-item label="编码">
-              <el-input v-model="anchorForm.code" placeholder="可选编码" />
-            </el-form-item>
-            <template v-if="anchorDialogKind === 'camera'">
-              <el-form-item label="摄像头类型">
-                <el-select v-model="anchorForm.cameraType" class="w-full">
-                  <el-option
-                    v-for="item in cameraTypeOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="摄像头编码">
-                <el-input
-                  v-model="anchorForm.cameraCode"
-                  placeholder="摄像头编码"
-                />
-              </el-form-item>
-            </template>
-            <template v-else>
-              <el-form-item label="点位类型">
-                <el-select v-model="anchorForm.type" class="w-full">
-                  <el-option
-                    v-for="item in sceneAnchorTypeOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-            </template>
+          @start-position-picking="startPositionPicking"
+          @submit="submitAnchorDialog"
+          @confirm-picked-position="confirmPickedPosition"
+          @cancel-position-picking="cancelPositionPicking"
+        />
 
-            <el-form-item label="定位方式">
-              <el-radio-group v-model="anchorForm.anchorMode">
-                <el-radio label="object">绑定构件</el-radio>
-                <el-radio label="world">世界坐标</el-radio>
-              </el-radio-group>
-            </el-form-item>
-
-            <el-form-item
-              v-if="anchorForm.anchorMode === 'object'"
-              label="绑定构件"
-            >
-              <el-select
-                v-model="anchorForm.objectUuid"
-                class="w-full"
-                filterable
-              >
-                <el-option
-                  v-for="item in sceneObjectOptions"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value"
-                />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item v-else label="世界坐标">
-              <div class="w-full space-y-2">
-                <div class="grid grid-cols-3 gap-2">
-                  <el-input-number
-                    v-model="anchorForm.worldPosition[0]"
-                    :step="0.1"
-                    controls-position="right"
-                  />
-                  <el-input-number
-                    v-model="anchorForm.worldPosition[1]"
-                    :step="0.1"
-                    controls-position="right"
-                  />
-                  <el-input-number
-                    v-model="anchorForm.worldPosition[2]"
-                    :step="0.1"
-                    controls-position="right"
-                  />
-                </div>
-                <div class="flex flex-wrap gap-2">
-                  <el-button size="small" @click="startPositionPicking">
-                    {{ positionPickingState.active ? "继续拾取" : "模型拾取" }}
-                  </el-button>
-                  <span class="text-xs text-[var(--el-text-color-secondary)]">
-                    未知坐标时可点击模型表面取点
-                  </span>
-                </div>
-              </div>
-            </el-form-item>
-
-            <el-form-item v-if="anchorDialogKind !== 'camera'" label="显示偏移">
-              <div class="grid w-full grid-cols-3 gap-2">
-                <el-input-number
-                  v-model="anchorForm.offset[0]"
-                  :step="0.05"
-                  controls-position="right"
-                />
-                <el-input-number
-                  v-model="anchorForm.offset[1]"
-                  :step="0.05"
-                  controls-position="right"
-                />
-                <el-input-number
-                  v-model="anchorForm.offset[2]"
-                  :step="0.05"
-                  controls-position="right"
-                />
-              </div>
-            </el-form-item>
-            <template v-if="anchorDialogKind === 'camera'">
-              <el-form-item label="绑定设备">
-                <el-select
-                  v-model="anchorForm.bindDeviceKks"
-                  class="w-full"
-                  clearable
-                  filterable
-                >
-                  <el-option
-                    v-for="item in deviceKksOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="流类型">
-                <el-select v-model="anchorForm.streamType" class="w-full">
-                  <el-option
-                    v-for="item in cameraStreamTypeOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="接入地址">
-                <el-input
-                  v-model="anchorForm.streamUrl"
-                  placeholder="请输入视频流地址"
-                />
-              </el-form-item>
-              <el-form-item label="打开方式">
-                <el-select
-                  v-model="anchorForm.defaultWindowMode"
-                  class="w-full"
-                >
-                  <el-option
-                    v-for="item in cameraWindowModeOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-            </template>
-
-            <template v-else>
-              <el-form-item label="绑定类型">
-                <el-select
-                  v-model="anchorForm.businessBinding.bindingType"
-                  class="w-full"
-                >
-                  <el-option
-                    v-for="item in anchorBindingTypeOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item
-                v-if="anchorForm.businessBinding.bindingType !== 'custom'"
-                label="绑定设备"
-              >
-                <el-select
-                  v-model="anchorForm.businessBinding.kks"
-                  class="w-full"
-                  clearable
-                  filterable
-                >
-                  <el-option
-                    v-for="item in deviceKksOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item
-                v-if="anchorForm.businessBinding.bindingType === 'measurement'"
-                label="绑定测点"
-              >
-                <el-select
-                  v-model="anchorForm.businessBinding.tag"
-                  class="w-full"
-                  clearable
-                  filterable
-                >
-                  <el-option
-                    v-for="item in anchorMeasurementOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-              </el-form-item>
-              <el-form-item
-                v-if="anchorForm.businessBinding.bindingType === 'custom'"
-                label="显示文本"
-              >
-                <el-input
-                  v-model="anchorForm.payload.displayText"
-                  placeholder="自定义显示文本"
-                />
-              </el-form-item>
-              <el-form-item
-                v-if="anchorForm.businessBinding.bindingType === 'custom'"
-                label="数值"
-              >
-                <div class="grid w-full grid-cols-[minmax(0,1fr)_120px] gap-2">
-                  <el-input
-                    v-model="anchorForm.payload.value"
-                    placeholder="值"
-                  />
-                  <el-input
-                    v-model="anchorForm.payload.unit"
-                    placeholder="单位"
-                  />
-                </div>
-              </el-form-item>
-            </template>
-
-            <el-form-item label="描述">
-              <el-input
-                v-model="anchorForm.description"
-                type="textarea"
-                :rows="3"
-                placeholder="可选描述"
-              />
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="anchorDialogVisible = false">取消</el-button>
-            <el-button type="primary" @click="submitAnchorDialog">
-              确定
-            </el-button>
-          </template>
-        </el-dialog>
-
-        <div
-          v-if="anchorDialogVisible && anchorDialogMinimized"
-          class="dd-anchor-picking-panel"
-        >
-          <div class="text-sm text-[var(--el-text-color-secondary)]">
-            {{ anchorDialogKind === "camera" ? "摄像头" : "点位" }}位置拾取中
-          </div>
-          <div
-            class="rounded border border-[var(--el-border-color)] px-3 py-2 text-sm"
-          >
-            {{ pickedPositionText }}
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <el-button type="primary" @click="confirmPickedPosition">
-              确认位置
-            </el-button>
-            <el-button @click="startPositionPicking">重新拾取</el-button>
-            <el-button @click="cancelPositionPicking">取消拾取</el-button>
-          </div>
-          <div class="text-xs text-[var(--el-text-color-secondary)]">
-            点击模型表面拾取坐标，确认后会回填到世界坐标。
-          </div>
-        </div>
-
-        <el-dialog
+        <AnchorDetailDialog
           v-model="anchorDetailVisible"
-          title="点位当前数据"
-          width="520px"
-          destroy-on-close
-        >
-          <div v-if="activeAnchorDetail" class="space-y-4">
-            <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="点位名称">
-                {{ activeAnchorDetail.name }}
-              </el-descriptions-item>
-              <el-descriptions-item label="点位类型">
-                {{ activeAnchorDetail.type }}
-              </el-descriptions-item>
-              <el-descriptions-item label="数据绑定">
-                {{ summarizeAnchorBinding(activeAnchorDetail) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="当前值">
-                {{
-                  `${activeAnchorDetail.runtimeState?.value ?? "-"}${activeAnchorDetail.runtimeState?.unit || ""}`
-                }}
-              </el-descriptions-item>
-              <el-descriptions-item label="展示文本">
-                {{ activeAnchorDetail.runtimeState?.displayText || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="状态">
-                {{ activeAnchorDetail.runtimeState?.status || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="来源">
-                {{ activeAnchorDetail.runtimeState?.sourceName || "-" }}
-              </el-descriptions-item>
-            </el-descriptions>
-          </div>
-        </el-dialog>
+          :anchor-detail="activeAnchorDetail"
+          :summarize-anchor-binding="summarizeAnchorBinding"
+        />
 
-        <el-dialog
+        <CameraVideoDialog
           v-model="videoDialogVisible"
-          title="视频接入"
-          width="640px"
-          destroy-on-close
+          :active-camera-detail="activeCameraDetail"
+          :video-loading="videoLoading"
+          :video-preview-supported="videoPreviewSupported"
+          :video-error-text="videoErrorText"
           @closed="runtimeStore.closeVideoDialog()"
-        >
-          <div v-if="activeCameraDetail" class="space-y-4">
-            <el-descriptions :column="2" border size="small">
-              <el-descriptions-item label="摄像头名称">
-                {{ activeCameraDetail.cameraName || activeCameraDetail.name }}
-              </el-descriptions-item>
-              <el-descriptions-item label="摄像头类型">
-                {{ activeCameraDetail.cameraType || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="流类型">
-                {{ activeCameraDetail.streamType || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="接入状态">
-                {{ activeCameraDetail.status || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="绑定设备">
-                {{ activeCameraDetail.bindDeviceKks || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="打开方式">
-                {{ activeCameraDetail.defaultWindowMode || "-" }}
-              </el-descriptions-item>
-              <el-descriptions-item label="接入地址" :span="2">
-                <span class="break-all">{{
-                  activeCameraDetail.streamUrl || "-"
-                }}</span>
-              </el-descriptions-item>
-            </el-descriptions>
-
-            <div
-              v-loading="videoLoading"
-              class="flex min-h-[260px] items-center justify-center rounded border border-[var(--el-border-color)] bg-[var(--el-fill-color-light)]"
-            >
-              <video
-                v-if="videoPreviewSupported"
-                ref="videoElementRef"
-                controls
-                playsinline
-                class="max-h-[320px] w-full rounded"
-              />
-              <div
-                v-else
-                class="px-6 text-center text-sm text-[var(--el-text-color-secondary)]"
-              >
-                当前流类型暂不支持直接播放，可查看接入信息后切换到兼容播放器。
-              </div>
-            </div>
-            <el-alert
-              v-if="videoErrorText"
-              :title="videoErrorText"
-              type="error"
-              :closable="false"
-            />
-          </div>
-        </el-dialog>
+          @video-ref-change="handleVideoElementRefChange"
+        />
       </div>
     </div>
   </div>
@@ -5402,61 +4956,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.dd-side-panel {
-  position: fixed;
-  top: var(--dd-panels-top);
-  right: var(--dd-gap);
-  bottom: var(--dd-bottom-reserve);
-  z-index: 1100;
-  width: var(--dd-panel-width);
-  box-shadow: var(--el-box-shadow-light);
-}
-
-.dd-side-panel :deep(.el-card__body) {
-  padding: 20px 0 20px 20px; /* remove right padding */
-  height: 100%;
-  box-sizing: border-box;
-}
-
-.dd-side-tabs :deep(.el-tabs__content) {
-  height: 100%;
-  padding-right: 12px; /* 给内层卡片预留一点空白以防贴近文字栏边缘 */
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar) {
-  width: 4px;
-}
-
-.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar-thumb) {
-  background: var(--el-border-color-dark);
-  border-radius: 4px;
-}
-
-.dd-side-tabs.el-tabs--right :deep(.el-tabs__item) {
-  height: auto !important;
-  padding: 16px 8px !important;
-  writing-mode: vertical-rl;
-  letter-spacing: 4px;
-}
-
-.dd-side-tabs.el-tabs--right :deep(.el-tabs__item.is-active) {
-  font-weight: bold;
-}
-
-.dd-side-tabs :deep(.el-tab-pane) {
-  height: 100%;
-}
-
-.dd-settings-dialog :deep(.el-dialog__body) {
-  padding: 16px 18px 18px;
-}
-
-.dd-quality-select {
-  width: 110px;
-}
-
 .dd-nav-ctx-menu {
   position: fixed;
   z-index: 9999;
@@ -5483,45 +4982,5 @@ onBeforeUnmount(() => {
 
 .dd-nav-ctx-danger:hover {
   color: var(--el-color-danger);
-}
-
-.dd-anchor-picking-panel {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 3001;
-  width: 360px;
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid var(--el-border-color-light);
-  background: var(--el-bg-color-overlay);
-  box-shadow: var(--el-box-shadow-light);
-}
-
-/* 底部工具栏：贴近“编辑器页”按钮风格（更紧凑、无多余间距、4px 圆角） */
-.dd-bottombar-card {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-  background: var(--el-bg-color-overlay);
-}
-
-@supports (backdrop-filter: blur(1px)) {
-  .dd-bottombar-card {
-    backdrop-filter: blur(10px) saturate(160%);
-  }
-}
-
-.dd-bottombar-card :deep(.el-card__body) {
-  padding: 10px 12px;
-}
-
-.dd-bottombar-card :deep(.el-button) {
-  border-radius: 4px;
-}
-
-.dd-bottombar-card :deep(.el-button + .el-button) {
-  margin-left: 0 !important;
 }
 </style>
