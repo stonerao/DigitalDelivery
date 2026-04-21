@@ -118,7 +118,7 @@ onBeforeUnmount(() => {
         <el-alert
           type="warning"
           :closable="false"
-          title="当前 PoC 使用 @cadview/dwg（GPL-3.0-only），仅用于内部可行性验证。"
+          title="当前 PoC 使用 mlightcad/cad-viewer WebGL 预览组件。"
         />
 
         <div class="dd-dwg-poc__panel">

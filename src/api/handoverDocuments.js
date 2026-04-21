@@ -62,15 +62,17 @@ export const rollbackHandoverDocumentVersion = (id, data) => {
   );
 };
 
-export const downloadHandoverDocumentFile = id => {
+export const downloadHandoverDocumentFile = (id, axiosConfig = {}) => {
   return http.request(
     "get",
     `/api/handover/documents/download/${encodeURIComponent(id)}`,
     {},
     {
+      ...axiosConfig,
       responseType: "blob",
       headers: {
-        Accept: "*/*"
+        Accept: "*/*",
+        ...(axiosConfig.headers || {})
       }
     }
   );

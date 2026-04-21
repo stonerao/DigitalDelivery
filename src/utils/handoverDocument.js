@@ -63,6 +63,7 @@ const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "ogg", "mov", "m4v"]);
 const DOCX_EXTENSIONS = new Set(["docx"]);
 const EXCEL_EXTENSIONS = new Set(["xls", "xlsx"]);
 const OFFICE_EXTENSIONS = new Set(["doc", "ppt", "pptx"]);
+const CAD_EXTENSIONS = new Set(["dwg"]);
 
 export function getLatestHandoverDocumentVersion(doc) {
   const versions = Array.isArray(doc?.versions) ? doc.versions : [];
@@ -233,6 +234,15 @@ export function getHandoverDocumentPreviewKind(doc) {
     VIDEO_EXTENSIONS.has(extension)
   ) {
     return "video";
+  }
+  if (
+    type === "DWG" ||
+    type === "CAD" ||
+    mime.includes("dwg") ||
+    mime.includes("acad") ||
+    CAD_EXTENSIONS.has(extension)
+  ) {
+    return "cad";
   }
   if (
     type === "DOCX" ||

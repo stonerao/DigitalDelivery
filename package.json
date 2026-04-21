@@ -47,8 +47,9 @@
     "url": "https://github.com/xiaoxian521"
   },
   "dependencies": {
-    "@cadview/core": "0.5.0",
-    "@cadview/dwg": "0.2.0",
+    "@mlightcad/cad-simple-viewer": "1.4.13",
+    "@mlightcad/cad-viewer": "1.4.13",
+    "@mlightcad/data-model": "1.7.20",
     "@pureadmin/descriptions": "^1.2.1",
     "@pureadmin/table": "^3.3.0",
     "@pureadmin/utils": "^2.6.3",
@@ -78,6 +79,7 @@
     "three": "0.180.0",
     "three-mesh-bvh": "^0.9.8",
     "vue": "^3.5.25",
+    "vue-i18n": "10.0.8",
     "vue-router": "^4.6.3",
     "vue-tippy": "^6.7.1",
     "vue-types": "^6.0.0",

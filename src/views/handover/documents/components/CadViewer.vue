@@ -1,189 +1,339 @@
 <script setup>
 import {
-  computed,
+  createApp,
+  h,
+  nextTick,
   onBeforeUnmount,
   onMounted,
+  reactive,
   ref,
-  shallowRef,
   watch
 } from "vue";
+import ElementPlus from "element-plus";
+import { i18n as cadViewerI18n, MlCadViewer } from "@mlightcad/cad-viewer";
+import {
+  AcApDocManager,
+  AcApSettingManager,
+  AcEdOpenMode,
+  eventBus
+} from "@mlightcad/cad-simple-viewer";
 
 defineOptions({ name: "CadViewer" });
 
 const props = defineProps({
   url: { type: String, default: "" },
+  blob: { type: Object, default: null },
   name: { type: String, default: "" }
 });
 
-const canvasRef = ref(null);
-const errorText = ref("");
+const hostRef = ref(null);
 const loading = ref(false);
-const releaseName = ref("");
-const versionText = ref("");
+const errorText = ref("");
 
-const viewerRef = shallowRef(null);
-
-let runtimePromise = null;
-let loadToken = 0;
-const localWasmUrl = `${import.meta.env.BASE_URL}libredwg.wasm`;
-
-const canOperate = computed(() => {
-  return Boolean(viewerRef.value) && !loading.value;
+const viewerState = reactive({
+  localFile: undefined
 });
 
-async function ensureRuntime() {
-  if (!runtimePromise) {
-    runtimePromise = (async () => {
-      const [{ CadViewer }, dwgModule] = await Promise.all([
-        import("@cadview/core"),
-        import("@cadview/dwg")
-      ]);
-      await dwgModule.initWasm({ wasmUrl: localWasmUrl });
-      return {
-        CadViewer,
-        ...dwgModule
-      };
-    })();
-  }
-  return runtimePromise;
+const ROOT_DARK_CLASS = "dark";
+const ROOT_ML_THEME_ATTR = "data-ml-ui-theme";
+const ML_UI_CSS_VARS = [
+  "--ml-ui-text",
+  "--ml-ui-text-muted",
+  "--ml-ui-bg",
+  "--ml-ui-border",
+  "--ml-ui-shadow",
+  "--ml-ui-overlay",
+  "--ml-ui-accent",
+  "--ml-ui-accent-alt",
+  "--ml-ui-danger",
+  "--ml-ui-canvas-line",
+  "--ml-ui-canvas-fill",
+  "--ml-ui-canvas-fill-mix"
+];
+
+let cadApp = null;
+let loadAbortController = null;
+let rootThemeSnapshot = null;
+let rootThemeObserver = null;
+let restoreRootThemeTimer = null;
+let trackedEventBusHandlers = [];
+
+function ensureDwgFileName(name = "") {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return "drawing.dwg";
+  return /\.(dwg|dxf)$/i.test(trimmed) ? trimmed : `${trimmed}.dwg`;
 }
 
-async function ensureViewer() {
-  if (viewerRef.value) return viewerRef.value;
-  if (!canvasRef.value) return null;
-  const { CadViewer, dwgConverter } = await ensureRuntime();
-  if (viewerRef.value) return viewerRef.value;
-  if (!canvasRef.value) return null;
+function configureCadViewerSettings() {
+  const settings = AcApSettingManager.instance;
+  settings.isShowCommandLine = false;
+  settings.isShowCoordinate = true;
+  settings.isShowEntityInfo = false;
+  settings.isShowFileName = false;
+  settings.isShowLanguageSelector = false;
+  settings.isShowMainMenu = true;
+  settings.isShowStats = false;
+  settings.isShowToolbar = true;
+}
 
-  viewerRef.value = new CadViewer(canvasRef.value, {
-    theme: "dark",
-    initialTool: "pan",
-    formatConverters: [dwgConverter]
+function captureRootThemeState() {
+  if (typeof document === "undefined") return null;
+  const root = document.documentElement;
+  return {
+    hadDarkClass: root.classList.contains(ROOT_DARK_CLASS),
+    mlTheme: root.getAttribute(ROOT_ML_THEME_ATTR),
+    mlVars: ML_UI_CSS_VARS.map(name => ({
+      name,
+      value: root.style.getPropertyValue(name),
+      priority: root.style.getPropertyPriority(name)
+    }))
+  };
+}
+
+function restoreRootThemeSideEffects() {
+  if (!rootThemeSnapshot || typeof document === "undefined") return;
+
+  const root = document.documentElement;
+  root.classList.toggle(ROOT_DARK_CLASS, rootThemeSnapshot.hadDarkClass);
+
+  if (rootThemeSnapshot.mlTheme === null) {
+    if (root.hasAttribute(ROOT_ML_THEME_ATTR)) {
+      root.removeAttribute(ROOT_ML_THEME_ATTR);
+    }
+  } else if (
+    root.getAttribute(ROOT_ML_THEME_ATTR) !== rootThemeSnapshot.mlTheme
+  ) {
+    root.setAttribute(ROOT_ML_THEME_ATTR, rootThemeSnapshot.mlTheme);
+  }
+
+  rootThemeSnapshot.mlVars.forEach(({ name, value, priority }) => {
+    if (value) {
+      const currentValue = root.style.getPropertyValue(name);
+      const currentPriority = root.style.getPropertyPriority(name);
+      if (currentValue !== value || currentPriority !== priority) {
+        root.style.setProperty(name, value, priority);
+      }
+    } else if (root.style.getPropertyValue(name)) {
+      root.style.removeProperty(name);
+    }
   });
-  return viewerRef.value;
 }
 
-function clearMeta() {
-  releaseName.value = "";
-  versionText.value = "";
-}
+function scheduleRootThemeRestore() {
+  restoreRootThemeSideEffects();
+  if (typeof window === "undefined") return;
 
-function clearViewerDocument() {
-  if (viewerRef.value) {
-    viewerRef.value.clearDocument();
+  if (restoreRootThemeTimer) {
+    window.clearTimeout(restoreRootThemeTimer);
   }
+  restoreRootThemeTimer = window.setTimeout(() => {
+    restoreRootThemeTimer = null;
+    restoreRootThemeSideEffects();
+  }, 0);
+}
+
+function startRootThemeGuard() {
+  if (rootThemeSnapshot || typeof document === "undefined") return;
+
+  rootThemeSnapshot = captureRootThemeState();
+  if (!rootThemeSnapshot || typeof MutationObserver === "undefined") return;
+
+  rootThemeObserver = new MutationObserver(() => {
+    scheduleRootThemeRestore();
+  });
+  rootThemeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style", ROOT_ML_THEME_ATTR]
+  });
+}
+
+function stopRootThemeGuard() {
+  if (rootThemeObserver) {
+    rootThemeObserver.disconnect();
+    rootThemeObserver = null;
+  }
+
+  if (restoreRootThemeTimer && typeof window !== "undefined") {
+    window.clearTimeout(restoreRootThemeTimer);
+    restoreRootThemeTimer = null;
+  }
+
+  restoreRootThemeSideEffects();
+  rootThemeSnapshot = null;
+}
+
+function trackEventBusHandlers(run) {
+  const originalOn = eventBus.on;
+  eventBus.on = function trackedOn(type, handler) {
+    trackedEventBusHandlers.push({ type, handler });
+    return originalOn.call(this, type, handler);
+  };
+
+  try {
+    return run();
+  } finally {
+    eventBus.on = originalOn;
+  }
+}
+
+function clearTrackedEventBusHandlers() {
+  trackedEventBusHandlers.forEach(({ type, handler }) => {
+    eventBus.off(type, handler);
+  });
+  trackedEventBusHandlers = [];
+}
+
+function mountCadApp() {
+  if (cadApp || !hostRef.value) return;
+
+  startRootThemeGuard();
+  configureCadViewerSettings();
+
+  cadApp = createApp({
+    name: "MlightCadViewerHost",
+    setup() {
+      return () =>
+        h(MlCadViewer, {
+          locale: "zh",
+          localFile: viewerState.localFile,
+          background: 0x0f172a,
+          theme: "dark",
+          mode: AcEdOpenMode.Read,
+          useMainThreadDraw: true
+        });
+    }
+  });
+  cadApp.use(cadViewerI18n);
+  cadApp.use(ElementPlus);
+  try {
+    trackEventBusHandlers(() => {
+      cadApp.mount(hostRef.value);
+    });
+    scheduleRootThemeRestore();
+  } catch (error) {
+    clearTrackedEventBusHandlers();
+    stopRootThemeGuard();
+    cadApp = null;
+    throw error;
+  }
+}
+
+function releaseCadRuntimeResources() {
+  const docManager = AcApDocManager._instance;
+  const view = docManager?.curView;
+  if (!view) return;
+
+  try {
+    view.stopAnimationLoop?.();
+    view.clear?.();
+
+    const statsDom = view._stats?.dom;
+    if (statsDom?.parentNode) {
+      statsDom.parentNode.removeChild(statsDom);
+    }
+  } catch {
+    // The third-party viewer exposes cleanup methods inconsistently; ignore
+    // teardown failures so closing the preview never blocks the host page.
+  }
+}
+
+function unmountCadApp() {
+  if (!cadApp) return;
+  releaseCadRuntimeResources();
+  cadApp.unmount();
+  clearTrackedEventBusHandlers();
+  cadApp = null;
+  stopRootThemeGuard();
+}
+
+async function createLocalFile(url, signal) {
+  if (props.blob) {
+    if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    return new File([props.blob], ensureDwgFileName(props.name), {
+      type: props.blob.type || "application/acad"
+    });
+  }
+
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`DWG 文件加载失败（HTTP ${response.status}）`);
+  }
+  const blob = await response.blob();
+  if (signal.aborted) throw new DOMException("aborted", "AbortError");
+
+  return new File([blob], ensureDwgFileName(props.name), {
+    type: blob.type || "application/acad"
+  });
 }
 
 async function loadDocument(url) {
-  const currentToken = ++loadToken;
-  errorText.value = "";
-  clearMeta();
+  if (loadAbortController) {
+    loadAbortController.abort();
+  }
 
-  if (!url) {
-    clearViewerDocument();
+  errorText.value = "";
+  viewerState.localFile = undefined;
+
+  if (!url && !props.blob) {
+    loading.value = false;
+    unmountCadApp();
     return;
   }
 
+  const controller = new AbortController();
+  loadAbortController = controller;
   loading.value = true;
+
   try {
-    const response = await fetch(url, {
-      credentials: "same-origin"
-    });
-    if (!response.ok) {
-      throw new Error(`DWG 文件加载失败（HTTP ${response.status}）`);
-    }
-    const buffer = await response.arrayBuffer();
-    if (currentToken !== loadToken) return;
+    const file = await createLocalFile(url, controller.signal);
+    if (controller.signal.aborted) return;
 
-    const runtime = await ensureRuntime();
-    if (!runtime.isDwg(buffer)) {
-      throw new Error("当前文件不是可识别的 DWG 格式");
-    }
-
-    versionText.value = runtime.getDwgVersion(buffer) || "";
-    releaseName.value = versionText.value
-      ? runtime.getDwgReleaseName(versionText.value) || ""
-      : "";
-
-    const viewer = await ensureViewer();
-    if (!viewer || currentToken !== loadToken) return;
-    await viewer.loadBuffer(buffer);
-    if (currentToken !== loadToken) return;
-    viewer.fitToView();
+    viewerState.localFile = file;
+    await nextTick();
+    mountCadApp();
   } catch (error) {
-    if (currentToken !== loadToken) return;
-    clearViewerDocument();
+    if (error?.name === "AbortError") return;
     errorText.value = error?.message || "DWG 文件预览失败";
   } finally {
-    if (currentToken === loadToken) {
+    if (loadAbortController === controller) {
+      loadAbortController = null;
       loading.value = false;
     }
   }
 }
 
-function fitToView() {
-  if (!canOperate.value) return;
-  viewerRef.value.fitToView();
-}
-
-function zoomBy(factor) {
-  if (!canOperate.value) return;
-  const transform = viewerRef.value.getViewTransform();
-  viewerRef.value.zoomTo(transform.scale * factor);
-}
-
 watch(
-  () => props.url,
-  url => {
-    if (canvasRef.value) {
-      loadDocument(url);
-    }
+  () => [props.url, props.blob, props.name],
+  ([url]) => {
+    if (hostRef.value) loadDocument(url);
   }
 );
 
 onMounted(() => {
-  if (props.url) {
-    loadDocument(props.url);
-  }
+  loadDocument(props.url);
 });
 
 onBeforeUnmount(() => {
-  ++loadToken;
-  if (viewerRef.value) {
-    viewerRef.value.destroy();
-    viewerRef.value = null;
+  if (loadAbortController) {
+    loadAbortController.abort();
+    loadAbortController = null;
   }
+  viewerState.localFile = undefined;
+  unmountCadApp();
 });
 </script>
 
 <template>
   <div class="dd-cad-viewer">
-    <div class="dd-cad-toolbar">
-      <div class="dd-cad-title">
-        <div class="dd-cad-name">{{ props.name || "DWG 预览" }}</div>
-        <div class="dd-cad-meta">
-          <span v-if="versionText">版本：{{ versionText }}</span>
-          <span v-if="releaseName"> / {{ releaseName }}</span>
-        </div>
-      </div>
-      <div class="dd-cad-actions">
-        <el-button :disabled="!canOperate" @click="zoomBy(1.2)">放大</el-button>
-        <el-button :disabled="!canOperate" @click="zoomBy(1 / 1.2)">
-          缩小
-        </el-button>
-        <el-button :disabled="!canOperate" @click="fitToView">
-          适配视图
-        </el-button>
-      </div>
-    </div>
+    
 
     <div class="dd-cad-stage">
-      <canvas ref="canvasRef" class="dd-cad-canvas" />
+      <div ref="hostRef" class="dd-ml-cad-host dark" />
       <div
         v-if="loading"
         class="dd-cad-tip text-[var(--el-text-color-secondary)]"
       >
-        正在加载 DWG 文件与本地转换模块...
+        正在加载 DWG 文件与 WebGL 预览器...
       </div>
       <div
         v-else-if="errorText"
@@ -196,6 +346,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+:global(body) {
+  display: block;
+}
+
 .dd-cad-viewer {
   width: 100%;
   display: flex;
@@ -226,36 +380,140 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
 }
 
-.dd-cad-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.dd-cad-tip {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, 0.84);
-  text-align: center;
-  z-index: 2;
-}
-
 .dd-cad-stage {
   position: relative;
-  height: 640px;
+  height: min(68vh, 720px);
+  min-height: 520px;
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
   overflow: hidden;
   background: #0f172a;
 }
 
-.dd-cad-canvas {
+.dd-ml-cad-host {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color-scheme: dark;
+  color: var(--el-text-color-regular);
+  --el-color-primary: #409eff;
+  --el-color-info: #909399;
+  --el-color-danger: #f56c6c;
+  --el-bg-color-page: #0a0a0a;
+  --el-bg-color: #141414;
+  --el-bg-color-overlay: #1d1e1f;
+  --el-text-color-primary: #e5eaf3;
+  --el-text-color-regular: #cfd3dc;
+  --el-text-color-secondary: #a3a6ad;
+  --el-text-color-placeholder: #8d9095;
+  --el-border-color: #4c4d4f;
+  --el-border-color-light: #414243;
+  --el-border-color-lighter: #363637;
+  --el-fill-color-darker: #424243;
+  --el-fill-color-dark: #39393a;
+  --el-fill-color: #303030;
+  --el-fill-color-light: #262727;
+  --el-fill-color-lighter: #1d1d1d;
+  --el-fill-color-blank: #141414;
+  --el-mask-color: rgba(0, 0, 0, 0.8);
+  --el-mask-color-extra-light: rgba(0, 0, 0, 0.3);
+  --el-box-shadow:
+    0 12px 32px 4px rgba(0, 0, 0, 0.36), 0 8px 20px rgba(0, 0, 0, 0.72);
+  --ml-ui-text: var(--el-text-color-primary);
+  --ml-ui-text-muted: var(--el-text-color-regular);
+  --ml-ui-bg: var(--el-bg-color-overlay);
+  --ml-ui-border: var(--el-border-color);
+  --ml-ui-shadow: var(--el-box-shadow);
+  --ml-ui-overlay: rgba(0, 0, 0, 0.5);
+  --ml-ui-accent: var(--el-color-primary);
+  --ml-ui-accent-alt: var(--el-color-info);
+  --ml-ui-danger: var(--el-color-danger);
+  --ml-ui-canvas-line: var(--el-color-primary);
+  --ml-ui-canvas-fill: rgba(64, 158, 255, 0.2);
+  --ml-ui-canvas-fill-mix: color-mix(
+    in srgb,
+    var(--el-color-primary) 20%,
+    transparent
+  );
+}
+
+.dd-cad-tip {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.88);
+  text-align: center;
+}
+
+.dd-ml-cad-host :deep(.ml-cad-container) {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  display: block;
+  outline: none;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.dd-ml-cad-host :deep(.ml-cad-viewer-container) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.dd-ml-cad-host :deep(.ml-main-menu-container),
+.dd-ml-cad-host :deep(.ml-vertical-toolbar-container),
+.dd-ml-cad-host :deep(.ml-status-bar),
+.dd-ml-cad-host :deep(.ml-notification-center),
+.dd-ml-cad-host :deep(.ml-base-dialog),
+.dd-ml-cad-host :deep(.ml-tool-palette-dialog),
+.dd-ml-cad-host :deep(.ml-cli-container),
+.dd-ml-cad-host :deep(.el-popper) {
+  pointer-events: auto;
+}
+
+.dd-ml-cad-host :deep(.ml-main-menu-container) {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+}
+
+.dd-ml-cad-host :deep(.ml-language-selector) {
+  display: none;
+}
+
+.dd-ml-cad-host :deep(.ml-vertical-toolbar-container) {
+  position: absolute;
+  top: 50%;
+  right: 18px;
+}
+
+.dd-ml-cad-host :deep(.ml-file-name) {
+  position: absolute;
+  top: 12px;
+}
+
+.dd-ml-cad-host :deep(.ml-notification-center) {
+  position: absolute;
+  right: 12px;
+  bottom: 48px;
+}
+
+.dd-ml-cad-host :deep(.ml-status-bar) {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.dd-ml-cad-host :deep(.ml-base-dialog) {
+  position: absolute;
 }
 </style>
