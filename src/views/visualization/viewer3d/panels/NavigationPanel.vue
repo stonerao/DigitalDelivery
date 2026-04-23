@@ -49,7 +49,6 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
-  "create-root-node",
   "navigation-node-click",
   "navigation-node-contextmenu",
   "update:selectedSystemNodeId",
@@ -88,12 +87,9 @@ defineExpose({
       <div class="rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 flex items-center justify-between gap-2">
           <div class="text-sm font-semibold">导航</div>
-          <el-button size="small" @click="emit('create-root-node')">
-            新增节点
-          </el-button>
         </div>
         <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
-          当前项目内自维护导航结构，按节点逐级定位到模型对象。
+          以模型为一级节点，按模型内构件逐级定位。
         </div>
         <el-tree
           v-if="hasNavigationData"

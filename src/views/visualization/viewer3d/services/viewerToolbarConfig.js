@@ -29,3 +29,19 @@ export const VIEWER_MEASUREMENT_MODE_OPTIONS = [
   { label: "夹角", value: "angle" },
   { label: "面积", value: "area" }
 ];
+
+export const VIEWER_MATERIAL_THEME_OPTIONS = [
+  { label: "线框", value: "wireframe" },
+  { label: "实体", value: "basic" },
+  { label: "渲染", value: "original" }
+];
+
+export const VIEWER_DISPLAY_ACTION_OPTIONS = [
+  { label: "显示全部", value: "all", mode: "all" },
+  { label: "仅看当前", value: "selection", mode: "selection" },
+  { label: "按当前系统", value: "system", mode: "system" },
+  { label: "按当前模型", value: "model", mode: "model" },
+  { label: "按当前类型", value: "type", mode: "type", needsSelection: true },
+  { label: "隐藏当前", value: "hide-current", needsSelection: true },
+  { label: "恢复隐藏", value: "restore-hidden" }
+];

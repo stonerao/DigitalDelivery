@@ -28,6 +28,10 @@ export function expandTreeToUUID({
 export function scrollCurrentTreeNodeIntoView({ uuid, treeRef }) {
   const tree = treeRef?.value;
   if (!tree || !uuid) return;
+  if (typeof tree.scrollToNode === "function") {
+    tree.scrollToNode(uuid, "smart");
+    return;
+  }
   tree.scrollTo?.(uuid);
 }
 

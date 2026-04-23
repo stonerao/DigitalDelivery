@@ -11,6 +11,7 @@ import OfficeViewer from "@/views/handover/documents/components/OfficeViewer.vue
 import TextViewer from "@/views/handover/documents/components/TextViewer.vue";
 import ImageViewer from "@/views/handover/documents/components/ImageViewer.vue";
 import MediaViewer from "@/views/handover/documents/components/MediaViewer.vue";
+import CadViewer from "@/views/handover/documents/components/CadViewer.vue";
 import {
   downloadHandoverDocumentFile,
   getHandoverDocumentDetail
@@ -206,6 +207,7 @@ async function openDocumentDetail(row) {
     if (blob) {
       const { url, revoke } = createHandoverDocumentObjectUrl(blob);
       detail.url = url;
+      detail.previewBlob = blob;
       revokeDocPreviewUrl = revoke;
     }
 
@@ -509,6 +511,17 @@ watch(
             class="rounded overflow-hidden border border-[var(--el-border-color)] p-4 bg-[var(--el-fill-color-blank)]"
           >
             <MediaViewer :url="docPreviewUrl" kind="video" />
+          </div>
+
+          <div
+            v-else-if="docPreviewKind === 'cad' && docPreviewUrl"
+            class="rounded overflow-hidden border border-[var(--el-border-color)]"
+          >
+            <CadViewer
+              :url="docPreviewUrl"
+              :blob="docDetail.previewBlob"
+              :name="docDetail.name"
+            />
           </div>
 
           <div

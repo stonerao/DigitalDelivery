@@ -105,6 +105,7 @@ export class ClippingTool {
     this.dynamicPlanes = new Map();
     this.lastMaterialSignature = "";
     this.capSignature = "";
+    this.capCandidateCache = { signature: "", candidates: [] };
     this.lastStatsAt = 0;
     this.transformControls = null;
     this.transformHelper = null;
@@ -139,6 +140,10 @@ export class ClippingTool {
     this.transformControls.setMode(this.state.editMode || "translate");
     this.transformControls.addEventListener("dragging-changed", event => {
       if (this.orbitControls) this.orbitControls.enabled = !event.value;
+      if (!event.value && this.state.enabled) {
+        this._applyState();
+        this._emitChange("transform-end");
+      }
     });
     this.transformControls.addEventListener("objectChange", () => {
       this._scheduleTransformCommit();
@@ -170,6 +175,8 @@ export class ClippingTool {
 
   setRoot(root) {
     this.root = root || this.scene;
+    this.activeBounds = null;
+    this._invalidateCapCandidateCache();
     this._rebuildObjectIndex();
     this.lastMaterialSignature = "";
     this.refreshMaterials();
@@ -178,6 +185,8 @@ export class ClippingTool {
 
   setBounds(box) {
     this.bounds = box?.clone?.() || box || null;
+    this.activeBounds = null;
+    this._invalidateCapCandidateCache();
     this._applyState();
   }
 
@@ -251,7 +260,10 @@ export class ClippingTool {
   }
 
   refreshMaterials({ lightweight = false } = {}) {
-    if (!lightweight) this._resetFeedbackMaterials();
+    if (!lightweight) {
+      this._resetFeedbackMaterials();
+      this._invalidateCapCandidateCache();
+    }
 
     const activePlanes = this.state.enabled ? this._getActivePlanes() : [];
     const targetRoot = this.root || this.scene;
@@ -266,6 +278,7 @@ export class ClippingTool {
       this._restoreTargetOpaqueMaterials();
       this._restoreMaterialOverrides();
       this.lastMaterialSignature = materialSignature;
+      this._invalidateCapCandidateCache();
     }
     if (objectModeActive) {
       this._ensureObjectMaterialOverrides(targetRoot, targetRoots);
@@ -338,6 +351,8 @@ export class ClippingTool {
       point: this.dragPoint.clone(),
       startState: this.getState()
     };
+    this.activeBounds = this.activeBounds || this._resolveActiveBounds();
+    if (this.state.capEnabled) this._getCapCandidates();
     this.dragCenter.copy(center);
     this.dragViewNormal.copy(viewNormal);
     this.dragAxisNormal.copy(axisNormal);
@@ -373,7 +388,7 @@ export class ClippingTool {
     if (!nextState) return null;
 
     this.state = normalizeClippingState(nextState);
-    this._applyState({ lightweight: true, source: "drag" });
+    this._applyInteractionState();
     this._emitChange("drag");
     return this.getState();
   }
@@ -411,6 +426,7 @@ export class ClippingTool {
     this.refreshMaterials();
     this._removeHelpers();
     this._removeCaps();
+    this._invalidateCapCandidateCache();
   }
 
   setAnimationOptions(options = {}) {
@@ -702,6 +718,17 @@ export class ClippingTool {
     }
   }
 
+  _applyInteractionState({ skipTransformSync = false } = {}) {
+    this.activeBounds = this.activeBounds || this._resolveActiveBounds();
+    const activeEntries = this._buildActivePlaneEntries();
+
+    this.renderer.localClippingEnabled = Boolean(this.state.enabled);
+    this.renderer.clippingPlanes = [];
+    this._updateHelpers(activeEntries);
+    this._updateCapsForInteraction(activeEntries);
+    if (!skipTransformSync) this._syncTransformControls(activeEntries);
+  }
+
   _analyzeMeshes(activeEntries) {
     const result = {
       enabled: Boolean(this.state.enabled),
@@ -949,6 +976,32 @@ export class ClippingTool {
       });
 
     return group;
+  }
+
+  _invalidateCapCandidateCache() {
+    this.capCandidateCache = { signature: "", candidates: [] };
+  }
+
+  _getCapCandidateCacheSignature() {
+    const roots = this._resolveTargetRoots();
+    return [
+      this.root?.uuid || this.scene?.uuid || "",
+      roots.map(item => item?.uuid || "").join("|"),
+      this.state.targets.mode,
+      this.state.targets.objectUuids.join("|"),
+      this.lastMaterialSignature
+    ].join("::");
+  }
+
+  _getCapCandidates() {
+    const signature = this._getCapCandidateCacheSignature();
+    if (signature === this.capCandidateCache.signature) {
+      return this.capCandidateCache.candidates;
+    }
+
+    const candidates = this._collectCapCandidates();
+    this.capCandidateCache = { signature, candidates };
+    return candidates;
   }
 
   _collectCapCandidates() {
@@ -1291,7 +1344,7 @@ export class ClippingTool {
       return;
     }
 
-    const candidates = this._collectCapCandidates();
+    const candidates = this._getCapCandidates();
     if (!candidates.length) {
       this._removeCaps();
       return;
@@ -1314,6 +1367,48 @@ export class ClippingTool {
         );
         this.scene.add(this.caps[entry.key]);
       }
+      this._syncCapGroup(
+        this.caps[entry.key],
+        entry,
+        activeEntries,
+        candidates
+      );
+      this.caps[entry.key].visible = true;
+    });
+
+    Object.keys(this.caps).forEach(key => {
+      if (activeKeys.has(key)) return;
+      this.scene.remove(this.caps[key]);
+      disposeSectionCapGroup(this.caps[key]);
+      this.caps[key] = null;
+    });
+  }
+
+  _updateCapsForInteraction(activeEntries) {
+    const shouldShow =
+      this.state.enabled &&
+      this.state.capEnabled &&
+      this._getEffectiveBounds() &&
+      activeEntries.length > 0;
+    if (!shouldShow) {
+      this._removeCaps();
+      return;
+    }
+
+    const candidates = this._getCapCandidates();
+    if (!candidates.length) {
+      this._removeCaps();
+      return;
+    }
+
+    const hasMissingCap = activeEntries.some(entry => !this.caps[entry.key]);
+    if (hasMissingCap) {
+      this._updateCaps(activeEntries);
+      return;
+    }
+
+    const activeKeys = new Set(activeEntries.map(item => item.key));
+    activeEntries.forEach(entry => {
       this._syncCapGroup(
         this.caps[entry.key],
         entry,
@@ -1619,7 +1714,7 @@ export class ClippingTool {
             : item
         )
       });
-      this._applyState({ lightweight: true, skipTransformSync: true });
+      this._applyInteractionState({ skipTransformSync: true });
       this._emitChange("plane-transform");
       return;
     }
@@ -1637,7 +1732,7 @@ export class ClippingTool {
         quaternion: quaternion.toArray()
       }
     });
-    this._applyState({ lightweight: true, skipTransformSync: true });
+    this._applyInteractionState({ skipTransformSync: true });
     this._emitChange("transform");
   }
 

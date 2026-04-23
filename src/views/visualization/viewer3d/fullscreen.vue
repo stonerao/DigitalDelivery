@@ -163,7 +163,6 @@ import Viewer3DWorkspace from "./components/fullscreen/Viewer3DWorkspace.vue";
 import Viewer2DWorkspace from "./components/fullscreen/Viewer2DWorkspace.vue";
 import SceneSettingsDialog from "./components/fullscreen/dialogs/SceneSettingsDialog.vue";
 import ModelPickerDialog from "./components/fullscreen/dialogs/ModelPickerDialog.vue";
-import NavigationNodeDialog from "./components/fullscreen/dialogs/NavigationNodeDialog.vue";
 import DocumentBindingDialog from "./components/fullscreen/dialogs/DocumentBindingDialog.vue";
 import PropertyBindingDialog from "./components/fullscreen/dialogs/PropertyBindingDialog.vue";
 import AnchorEditorDialog from "./components/fullscreen/dialogs/AnchorEditorDialog.vue";
@@ -268,8 +267,7 @@ const scriptEngine = createScriptEngine({
       transparent.value = enabled;
     },
     setMaterialTheme: theme => {
-      materialTheme.value = theme;
-      viewerAdapter.setMaterialTheme(theme);
+      setMaterialTheme(theme);
     },
     applyBookmark: bookmarkName => {
       const bookmark = bookmarks.value.find(item => item.name === bookmarkName);
@@ -345,19 +343,11 @@ const savingProject = ref(false);
 const availableModels = ref([]);
 const modelPickerVisible = ref(false);
 const modelPickerSelection = ref([]);
-const modelPickerNodeId = ref("");
 const loadingModelOptions = ref(false);
 const activeSceneModelId = ref("");
 const sceneModels = ref([]);
 const systemNodeTree = ref([]);
 const savedObjectBindings = ref([]);
-const navNodeDialogVisible = ref(false);
-const navNodeDialogMode = ref("create");
-const navNodeDialogParentId = ref("");
-const navNodeDialogTargetId = ref("");
-const navNodeForm = ref({
-  label: ""
-});
 const documentDialogVisible = ref(false);
 const documentDialogScope = ref("node");
 const documentDialogMode = ref("bind");
@@ -503,13 +493,6 @@ const systemNodeLabelMap = computed(() => {
     map.set(node.id, node.label);
   });
   return map;
-});
-
-const systemNodeSelectOptions = computed(() => {
-  return flatSystemNodes.value.map(node => ({
-    label: `${"\u3000".repeat(node.depth)}${node.label}`,
-    value: node.id
-  }));
 });
 
 function getSystemNodeLabel(nodeId) {
@@ -788,15 +771,6 @@ async function syncSceneObjectRelationsFromBackend() {
   }
 }
 
-function createNavigationNode(label, parentId = "") {
-  return {
-    id: `nav-node-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
-    parentId: String(parentId || "").trim(),
-    label: String(label || "").trim(),
-    children: []
-  };
-}
-
 function updateSceneModelNodeLabels() {
   sceneModels.value = sceneModels.value.map(item => ({
     ...item,
@@ -816,30 +790,6 @@ function persistNavigationTree() {
   projectStore.setProjectPackage(nextPackage);
 }
 
-function openCreateNavigationNodeDialog(parentId = "") {
-  navNodeDialogMode.value = "create";
-  navNodeDialogParentId.value = String(parentId || "").trim();
-  navNodeDialogTargetId.value = "";
-  navNodeForm.value = {
-    label: ""
-  };
-  ctxMenuVisible.value = false;
-  navNodeDialogVisible.value = true;
-}
-
-function openEditNavigationNodeDialog(node) {
-  const targetId = String(node?.nodeId || node?.id || "").trim();
-  if (!targetId) return;
-  navNodeDialogMode.value = "edit";
-  navNodeDialogParentId.value = String(node?.parentId || "").trim();
-  navNodeDialogTargetId.value = targetId;
-  navNodeForm.value = {
-    label: String(node?.label || "").trim()
-  };
-  ctxMenuVisible.value = false;
-  navNodeDialogVisible.value = true;
-}
-
 function upsertNavigationNode(nodes = [], targetId, updater) {
   return nodes.map(node => {
     if (node.id === targetId) {
@@ -853,34 +803,6 @@ function upsertNavigationNode(nodes = [], targetId, updater) {
     }
     return node;
   });
-}
-
-function appendNavigationChild(nodes = [], parentId, childNode) {
-  if (!parentId) return [...nodes, childNode];
-  return nodes.map(node => {
-    if (node.id === parentId) {
-      return {
-        ...node,
-        children: [...(node.children || []), childNode]
-      };
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      return {
-        ...node,
-        children: appendNavigationChild(node.children, parentId, childNode)
-      };
-    }
-    return node;
-  });
-}
-
-function removeNavigationNode(nodes = [], targetId) {
-  return nodes
-    .filter(node => node.id !== targetId)
-    .map(node => ({
-      ...node,
-      children: removeNavigationNode(node.children || [], targetId)
-    }));
 }
 
 function findNavigationNodeById(nodes = [], targetId) {
@@ -914,56 +836,6 @@ function updateNavigationNodeBoundDocuments(nodeId, documents = []) {
     })
   );
   persistNavigationTree();
-}
-
-function confirmNavigationNodeDialog() {
-  const label = String(navNodeForm.value.label || "").trim();
-  if (!label) {
-    message("请输入导航节点名称", { type: "warning" });
-    return;
-  }
-  if (navNodeDialogMode.value === "create") {
-    systemNodeTree.value = appendNavigationChild(
-      systemNodeTree.value,
-      navNodeDialogParentId.value,
-      createNavigationNode(label, navNodeDialogParentId.value)
-    );
-  } else if (navNodeDialogTargetId.value) {
-    systemNodeTree.value = upsertNavigationNode(
-      systemNodeTree.value,
-      navNodeDialogTargetId.value,
-      node => ({
-        ...node,
-        label
-      })
-    );
-  }
-  persistNavigationTree();
-  navNodeDialogVisible.value = false;
-}
-
-function removeNavigationNodeById(nodeId) {
-  const targetId = String(nodeId || "").trim();
-  if (!targetId) return;
-  if (!window.confirm("确认删除当前导航节点？")) return;
-  const hasMountedModels = sceneModels.value.some(
-    item => String(item.systemNodeId || "").trim() === targetId
-  );
-  const hasDevices = sceneDevices.value.some(
-    item => String(item.nodeId || "").trim() === targetId
-  );
-  if (hasMountedModels || hasDevices) {
-    message("该导航节点下仍有关联模型或构件，暂不能删除", {
-      type: "warning"
-    });
-    return;
-  }
-  systemNodeTree.value = removeNavigationNode(systemNodeTree.value, targetId);
-  persistNavigationTree();
-  ctxMenuVisible.value = false;
-  if (currentNavNodeKey.value.endsWith(`:${targetId}`)) {
-    currentNavNodeKey.value = "";
-  }
 }
 
 const activeSceneModel = computed(() => {
@@ -1189,7 +1061,6 @@ const viewerSceneModels = computed(() =>
 
 function openModelPicker() {
   modelPickerSelection.value = [];
-  modelPickerNodeId.value = selectedSystemNodeId.value || "";
   modelPickerVisible.value = true;
 }
 
@@ -1209,14 +1080,8 @@ async function confirmAddModels() {
   const details = (
     await Promise.all(appendIds.map(id => fetchModelDetail(id)))
   ).filter(Boolean);
-  const selectedNodeLabel = getSystemNodeLabel(modelPickerNodeId.value);
   details.forEach(detail => {
-    sceneModels.value.push(
-      createFullscreenSceneModel(detail, {
-        systemNodeId: modelPickerNodeId.value || "",
-        systemNodeLabel: selectedNodeLabel
-      })
-    );
+    sceneModels.value.push(createFullscreenSceneModel(detail));
   });
 
   if (!activeSceneModelId.value && sceneModels.value.length > 0) {
@@ -1280,6 +1145,10 @@ function handleLayerTreeRefChange(value) {
   layerTreeRef.value = value;
 }
 
+function handleStructureTreeRefChange(value) {
+  treeRef.value = value;
+}
+
 function handleVideoElementRefChange(value) {
   videoElementRef.value = value;
 }
@@ -1301,6 +1170,13 @@ const treeDefaultExpandedKeys = ref([]);
 const treeNodeIndex = ref(new Map());
 const treeParentMap = ref(new Map());
 const treeExpandedKeys = ref(new Set());
+const treeV2Props = {
+  value: "uuid",
+  label: "name",
+  children: "children"
+};
+const meshOpacity = ref(0.2);
+const structureModelTypeFilter = ref("all");
 
 const anchorDialogVisible = ref(false);
 const anchorDialogKind = ref("anchor");
@@ -1676,6 +1552,99 @@ const sceneObjectOptions = computed(() => {
   return options;
 });
 
+const MODEL_TYPE_LABELS = {
+  glb: "GLB",
+  gltf: "GLTF",
+  ifc: "IFC",
+  obj: "OBJ"
+};
+
+function normalizeModelType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function walkSceneTree(node, visitor) {
+  if (!node) return;
+  visitor(node);
+  (node.children || []).forEach(child => walkSceneTree(child, visitor));
+}
+
+const structureModelTypeOptions = computed(() => {
+  const types = new Set();
+  walkSceneTree(sceneTree.value, node => {
+    const type = normalizeModelType(node.sceneModelType);
+    if (type) types.add(type);
+  });
+
+  return [
+    { label: "全部类型", value: "all" },
+    ...Array.from(types)
+      .sort()
+      .map(type => ({
+        label: MODEL_TYPE_LABELS[type] || type.toUpperCase(),
+        value: type
+      }))
+  ];
+});
+
+function getStructureFilterPayload(criteria) {
+  if (criteria && typeof criteria === "object") {
+    return {
+      keyword: String(criteria.keyword || "")
+        .trim()
+        .toLowerCase(),
+      modelType: normalizeModelType(criteria.modelType || "all")
+    };
+  }
+  return {
+    keyword: String(criteria || "")
+      .trim()
+      .toLowerCase(),
+    modelType: normalizeModelType(structureModelTypeFilter.value || "all")
+  };
+}
+
+function structureNodeMatchesKeyword(node, keyword) {
+  if (!keyword) return true;
+  const texts = [
+    node?.name,
+    node?.type,
+    node?.sceneModelName,
+    node?.sceneModelId,
+    node?.sceneModelType
+  ];
+  return texts.some(text =>
+    String(text || "")
+      .trim()
+      .toLowerCase()
+      .includes(keyword)
+  );
+}
+
+function structureNodeMatchesModelType(node, modelType) {
+  if (!modelType || modelType === "all") return true;
+  return normalizeModelType(node?.sceneModelType) === modelType;
+}
+
+function structureNodeOrDescendantMatches(node, predicate) {
+  if (predicate(node)) return true;
+  return (node?.children || []).some(child =>
+    structureNodeOrDescendantMatches(child, predicate)
+  );
+}
+
+function structureFilterMethod(criteria, node) {
+  const { keyword, modelType } = getStructureFilterPayload(criteria);
+  return structureNodeOrDescendantMatches(node, item => {
+    return (
+      structureNodeMatchesKeyword(item, keyword) &&
+      structureNodeMatchesModelType(item, modelType)
+    );
+  });
+}
+
 const deviceKksOptions = computed(() => {
   return ddStore.kksItems
     .filter(item => item.type === "设备")
@@ -1798,6 +1767,8 @@ const displayModeText = computed(() => {
     business: "已绑定业务设备",
     system: "当前系统",
     selection: "当前设备",
+    model: "当前模型",
+    type: "当前类型",
     tree: "分层树筛选"
   };
   return map[displayMode.value] || "全部构件";
@@ -1815,79 +1786,31 @@ const configuredObjectBindings = computed(() => {
 });
 
 const navigationTreeData = computed(() => {
-  const buildNodes = (nodes = [], level = 0) => {
-    return nodes
-      .map(node => {
-        const childNodes = buildNodes(node.children || [], level + 1);
-        const devices = getDevicesBySystem(node.id).map(device => ({
-          id: `nav-device:${device.uuid}`,
-          label: device.kks ? `${device.name}（${device.kks}）` : device.name,
-          kind: "device",
-          uuid: device.uuid,
-          nodeId: device.nodeId,
-          kks: device.kks,
-          raw: device
-        }));
-        const children = [...childNodes, ...devices];
-        const deviceCount = children.reduce((sum, item) => {
-          if (item.kind === "device") return sum + 1;
-          return sum + Number(item.deviceCount || 0);
-        }, 0);
-        return {
-          id: `nav-${level === 0 ? "region" : "system"}:${node.id}`,
-          label: `${node.label}${deviceCount ? `（${deviceCount}）` : ""}`,
-          kind: level === 0 ? "region" : "system",
-          nodeId: node.id,
-          parentId: node.parentId || "",
-          deviceCount,
-          children
-        };
-      })
-      .filter(Boolean);
-  };
+  return sceneModels.value.map(item => {
+    const devices = sceneDevices.value
+      .filter(device => device.instanceId === item.instanceId)
+      .map(device => ({
+        id: `nav-device:${device.uuid}`,
+        label: device.kks ? `${device.name}（${device.kks}）` : device.name,
+        kind: "device",
+        uuid: device.uuid,
+        nodeId: device.nodeId,
+        kks: device.kks,
+        raw: device
+      }));
 
-  const mountedTree = buildNodes(systemNodeTree.value);
-  const unmountedModels = sceneModels.value
-    .filter(item => !String(item.systemNodeId || "").trim())
-    .map(item => {
-      const devices = sceneDevices.value
-        .filter(device => device.instanceId === item.instanceId)
-        .map(device => ({
-          id: `nav-device:${device.uuid}`,
-          label: device.kks ? `${device.name}（${device.kks}）` : device.name,
-          kind: "device",
-          uuid: device.uuid,
-          nodeId: device.nodeId,
-          kks: device.kks,
-          raw: device
-        }));
-
-      return {
-        id: `nav-model:${item.instanceId}`,
-        label: `${item.modelName || "未命名模型"}${devices.length ? `（${devices.length}）` : ""}`,
-        kind: "model",
-        instanceId: item.instanceId,
-        deviceCount: devices.length,
-        children: devices
-      };
-    });
-
-  if (unmountedModels.length > 0) {
-    mountedTree.push({
-      id: "nav-unmounted-models",
-      label: "未挂载模型",
-      kind: "group",
-      nodeId: "",
+    return {
+      id: `nav-model:${item.instanceId}`,
+      label: `${item.modelName || "未命名模型"}${devices.length ? `（${devices.length}）` : ""}`,
+      kind: "model",
+      instanceId: item.instanceId,
+      modelId: item.modelId,
+      nodeId: item.instanceId,
       parentId: "",
-      deviceCount: unmountedModels.reduce(
-        (sum, item) => sum + Number(item.deviceCount || 0),
-        0
-      ),
-      children: unmountedModels
-    });
-  }
-
-  return mountedTree;
+      deviceCount: devices.length,
+      children: devices
+    };
+  });
 });
 
 const layerTreeData = computed(() => {
@@ -2463,8 +2386,74 @@ function clearLodOverride() {
 }
 
 function setMaterialTheme(theme) {
-  materialTheme.value = theme;
-  viewerAdapter.setMaterialTheme(theme);
+  const nextTheme = theme || "original";
+  runtimeStore.setMaterialTheme(nextTheme);
+  viewerAdapter.setMaterialTheme(nextTheme);
+}
+
+function setRuntimeDisplayMode(mode) {
+  runtimeStore.setDisplayMode(mode || "all");
+}
+
+function getSceneDeviceUuids(item) {
+  const meshUuids = Array.isArray(item?.meshUuids) ? item.meshUuids : [];
+  const uuids = meshUuids.length ? meshUuids : item?.uuid ? [item.uuid] : [];
+  return uuids.filter(Boolean);
+}
+
+function getSceneDevicesUuids(items = []) {
+  return items.flatMap(item => getSceneDeviceUuids(item));
+}
+
+function getSelectedObjectUuid() {
+  const selected = selectedObjectInfo.value || {};
+  return selected.objectUuid || selected.uuid || selectedDeviceUuid.value || "";
+}
+
+function getSelectedDisplayUuids() {
+  if (selectedSceneDevice.value?.uuid) {
+    return getSceneDeviceUuids(selectedSceneDevice.value);
+  }
+
+  const selected = selectedObjectInfo.value || {};
+  const meshUuids = Array.isArray(selected.meshUuids)
+    ? selected.meshUuids.filter(Boolean)
+    : [];
+  if (meshUuids.length) return meshUuids;
+
+  const uuid = selected.objectUuid || selected.uuid || "";
+  return uuid ? [uuid] : [];
+}
+
+function getSelectedObjectType() {
+  return String(
+    selectedSceneDevice.value?.type || selectedObjectInfo.value?.type || ""
+  ).trim();
+}
+
+function resolveCurrentModelInstanceId() {
+  const selected = selectedObjectInfo.value || {};
+  const selectedInstanceId =
+    selectedSceneDevice.value?.instanceId ||
+    selected.userData?.sceneModelInstanceId ||
+    selected.sceneModelInstanceId ||
+    selected.instanceId ||
+    "";
+  if (selectedInstanceId) return selectedInstanceId;
+
+  const activeModel = sceneModels.value.find(item => {
+    return (
+      item.instanceId === activeSceneModelId.value ||
+      item.modelId === activeSceneModelId.value
+    );
+  });
+  return activeModel?.instanceId || sceneModels.value[0]?.instanceId || "";
+}
+
+function ensureDisplayActionReady() {
+  if (viewerAdapter.isReady()) return true;
+  message("请先加载模型", { type: "warning" });
+  return false;
 }
 
 function areSceneOverlaysSuppressed() {
@@ -2553,6 +2542,12 @@ function openEditAnchorDialog(item, kind = "anchor") {
   anchorDialogMode.value = "edit";
   anchorForm.value = buildStyledAnchorForm(kind, item);
   anchorDialogVisible.value = true;
+}
+
+function selectAndEditSceneAnchor(item, kind = "anchor") {
+  updateSceneAnchorSelection(item, kind);
+  focusSceneObjectSelection(item?.objectUuid);
+  openEditAnchorDialog(item, kind);
 }
 
 function validateAnchorForm(form, kind) {
@@ -3251,6 +3246,21 @@ async function locateRegion(regionId, withMessage = true) {
 async function locateModelInstance(instanceId, withMessage = true) {
   const devices = getDevicesByModelInstance(instanceId);
   if (!devices.length) {
+    const modelNode = findSceneTreeNodeByModelInstanceId(instanceId);
+    if (modelNode?.uuid) {
+      selectedTreeNode.value = modelNode;
+      viewerAdapter.selectObjectByUUID(modelNode.uuid, { emitEvent: false });
+      viewerAdapter.focusObjectByUUID(modelNode.uuid);
+      currentNavNodeKey.value = `nav-model:${instanceId}`;
+      await selectTreeNodeByUUID(modelNode.uuid, { openPanel: false });
+      if (withMessage) {
+        message(`已定位到模型：${modelNode.sceneModelName || modelNode.name}`, {
+          type: "success"
+        });
+      }
+      return true;
+    }
+
     if (withMessage) {
       message("当前模型暂无可定位构件", { type: "warning" });
     }
@@ -3278,6 +3288,19 @@ async function locateModelInstance(instanceId, withMessage = true) {
     message(`已定位到模型：${modelLabel}`, { type: "success" });
   }
   return true;
+}
+
+async function locateSceneModel(item) {
+  const modelId = typeof item === "string" ? item : item?.modelId;
+  const instanceId =
+    item?.instanceId ||
+    sceneModels.value.find(model => model.modelId === modelId)?.instanceId ||
+    "";
+  if (!instanceId) {
+    message("请先选择一个模型", { type: "warning" });
+    return false;
+  }
+  return await locateModelInstance(instanceId);
 }
 
 async function locateByKks(kks = selectedQuickKks.value) {
@@ -3347,18 +3370,6 @@ function handleNavTreeContextMenu(event, data) {
       ctxMenuVisible.value = value;
     }
   });
-}
-
-function onCtxCreateChildNode() {
-  openCreateNavigationNodeDialog(ctxMenuNode.value?.nodeId || "");
-}
-
-function onCtxEditNode() {
-  openEditNavigationNodeDialog(ctxMenuNode.value);
-}
-
-function onCtxRemoveNode() {
-  removeNavigationNodeById(ctxMenuNode.value?.nodeId || "");
 }
 
 function getDocumentDialogMeta(scope = documentDialogScope.value) {
@@ -4040,7 +4051,7 @@ function handleLayerTreeCheck() {
 }
 
 async function applyDisplayMode(mode, withMessage = true) {
-  await applySceneDisplayMode({
+  return await applySceneDisplayMode({
     mode,
     viewerAdapter,
     sceneDevices: sceneDevices.value,
@@ -4058,6 +4069,136 @@ async function applyDisplayMode(mode, withMessage = true) {
     notify: message,
     withMessage
   });
+}
+
+async function applySelectionDisplayAction() {
+  if (selectedSceneDevice.value?.uuid) {
+    return await applyDisplayMode("selection", true);
+  }
+
+  const uuids = getSelectedDisplayUuids();
+  const selectedUuid = getSelectedObjectUuid();
+  if (!uuids.length || !selectedUuid) {
+    message("请先选择一个构件", { type: "warning" });
+    return false;
+  }
+
+  viewerAdapter.showOnlyUUIDs(uuids);
+  viewerAdapter.focusObjectsByUUIDs(uuids);
+  setRuntimeDisplayMode("selection");
+  syncLayerTreeSelection([selectedUuid]);
+  await selectTreeNodeByUUID(selectedUuid, { openPanel: false });
+  message("已切换为仅显示当前构件", { type: "success" });
+  return true;
+}
+
+async function applyModelDisplayAction() {
+  const instanceId = resolveCurrentModelInstanceId();
+  if (!instanceId) {
+    message("请先选择一个模型或构件", { type: "warning" });
+    return false;
+  }
+
+  const devices = getDevicesByModelInstance(instanceId);
+  const uuids = getSceneDevicesUuids(devices);
+  if (!uuids.length) {
+    message("当前模型暂无可显示构件", { type: "warning" });
+    return false;
+  }
+
+  viewerAdapter.showOnlyUUIDs(uuids);
+  viewerAdapter.focusObjectsByUUIDs(uuids);
+  if (devices[0]?.uuid) {
+    selectedDeviceUuid.value = devices[0].uuid;
+  }
+  setRuntimeDisplayMode("model");
+  syncLayerTreeSelection(devices.map(item => item.uuid).filter(Boolean));
+
+  const modelLabel =
+    sceneModels.value.find(item => item.instanceId === instanceId)?.modelName ||
+    "当前模型";
+  message(`已切换为仅显示模型：${modelLabel}`, { type: "success" });
+  return true;
+}
+
+async function applyTypeDisplayAction() {
+  const type = getSelectedObjectType();
+  if (!type) {
+    message("请先选择一个构件", { type: "warning" });
+    return false;
+  }
+
+  const devices = sceneDevices.value.filter(item => item.type === type);
+  const uuids = getSceneDevicesUuids(devices);
+  if (!uuids.length) {
+    message("当前类型暂无可显示构件", { type: "warning" });
+    return false;
+  }
+
+  viewerAdapter.showOnlyUUIDs(uuids);
+  viewerAdapter.focusObjectsByUUIDs(uuids);
+  setRuntimeDisplayMode("type");
+  syncLayerTreeSelection(devices.map(item => item.uuid).filter(Boolean));
+  message(`已切换为仅显示类型：${type}`, { type: "success" });
+  return true;
+}
+
+function hideCurrentDisplayObject() {
+  const uuids = getSelectedDisplayUuids();
+  if (!uuids.length) {
+    message("请先选择一个构件", { type: "warning" });
+    return false;
+  }
+
+  viewerAdapter.hideUUIDs(uuids);
+  message("已隐藏当前构件", { type: "success" });
+  return true;
+}
+
+function clearHiddenDisplayObjects() {
+  viewerAdapter.clearHiddenUUIDs();
+  message("已恢复隐藏构件", { type: "success" });
+  return true;
+}
+
+async function applyDisplayAction(action) {
+  if (!ensureDisplayActionReady()) return false;
+
+  if (action === "all") {
+    viewerAdapter.clearHiddenUUIDs();
+    viewerAdapter.clearIsolation();
+    viewerAdapter.filterVisibleUUIDs(null);
+    setRuntimeDisplayMode("all");
+    syncLayerTreeSelection();
+    message("已恢复全部构件显示", { type: "success" });
+    return true;
+  }
+
+  if (action === "selection") {
+    return applySelectionDisplayAction();
+  }
+
+  if (action === "system") {
+    return await applyDisplayMode("system", true);
+  }
+
+  if (action === "model") {
+    return applyModelDisplayAction();
+  }
+
+  if (action === "type") {
+    return applyTypeDisplayAction();
+  }
+
+  if (action === "hide-current") {
+    return hideCurrentDisplayObject();
+  }
+
+  if (action === "restore-hidden") {
+    return clearHiddenDisplayObjects();
+  }
+
+  return false;
 }
 
 async function onObjectSelect(info) {
@@ -4147,6 +4288,39 @@ function scrollCurrentTreeNodeIntoView(uuid) {
   scrollSceneCurrentTreeNodeIntoView({ uuid, treeRef });
 }
 
+function collectTreeNodeUuids(node, set = new Set()) {
+  if (!node) return set;
+  if (node.uuid) set.add(node.uuid);
+  (node.children || []).forEach(child => collectTreeNodeUuids(child, set));
+  return set;
+}
+
+function getLayerKeysForTreeNode(node) {
+  const uuids = collectTreeNodeUuids(node);
+  if (!uuids.size) return [];
+  return sceneDevices.value
+    .filter(device => {
+      if (uuids.has(device.uuid)) return true;
+      const meshUuids = Array.isArray(device.meshUuids) ? device.meshUuids : [];
+      return meshUuids.some(uuid => uuids.has(uuid));
+    })
+    .map(item => item.uuid)
+    .filter(Boolean);
+}
+
+function findSceneTreeNodeByModelInstanceId(instanceId) {
+  const key = String(instanceId || "").trim();
+  if (!key) return null;
+  let matched = null;
+  walkSceneTree(sceneTree.value, node => {
+    if (matched) return;
+    if (String(node?.sceneModelInstanceId || "").trim() === key) {
+      matched = node;
+    }
+  });
+  return matched;
+}
+
 async function selectTreeNodeByUUID(uuid, { openPanel = true } = {}) {
   await selectSceneTreeNodeByUUID({
     uuid,
@@ -4164,6 +4338,124 @@ async function selectTreeNodeByUUID(uuid, { openPanel = true } = {}) {
     scrollCurrentTreeNodeIntoView,
     viewerAdapter
   });
+}
+
+function handleTreeNodeExpand(data) {
+  if (data?.uuid) treeExpandedKeys.value.add(data.uuid);
+}
+
+function handleTreeNodeCollapse(data) {
+  if (data?.uuid) treeExpandedKeys.value.delete(data.uuid);
+}
+
+function applyStructureTreeFilter() {
+  treeRef.value?.filter?.({
+    keyword: treeFilterText.value,
+    modelType: structureModelTypeFilter.value
+  });
+}
+
+function handleStructureFilterUpdate(value) {
+  treeFilterText.value = value || "";
+  applyStructureTreeFilter();
+}
+
+function handleStructureModelTypeFilterUpdate(value) {
+  structureModelTypeFilter.value = value || "all";
+  applyStructureTreeFilter();
+}
+
+async function handleStructureNodeClick(node) {
+  selectedTreeNode.value = node || null;
+  if (!node?.uuid) return;
+
+  const target = sceneDevices.value.find(item => {
+    if (item.uuid === node.uuid) return true;
+    const meshUuids = Array.isArray(item.meshUuids) ? item.meshUuids : [];
+    return meshUuids.includes(node.uuid);
+  }) || {
+    uuid: node.uuid,
+    name: node.name || "未命名构件",
+    path: node.name || "",
+    type: node.type || "Object3D",
+    meshUuids: [node.uuid],
+    kks: "",
+    nodeId: ""
+  };
+  await locateDevice(target, false);
+}
+
+function focusSelectedNode() {
+  if (!selectedTreeNode.value?.uuid) return;
+  viewerAdapter.selectObjectByUUID(selectedTreeNode.value.uuid, {
+    emitEvent: false
+  });
+  viewerAdapter.focusObjectByUUID(selectedTreeNode.value.uuid);
+}
+
+function makeSelectedMeshTransparent() {
+  if (!selectedTreeNode.value?.isMesh) return;
+  viewerAdapter.setMeshOpacityByUUID(
+    selectedTreeNode.value.uuid,
+    meshOpacity.value
+  );
+}
+
+function restoreSelectedMeshOpacity() {
+  if (!selectedTreeNode.value?.isMesh) return;
+  viewerAdapter.setMeshOpacityByUUID(selectedTreeNode.value.uuid, 1);
+}
+
+function handleMeshOpacityUpdate(value) {
+  meshOpacity.value = Number(value) || 0.2;
+}
+
+async function isolateSelectedNode() {
+  if (!selectedTreeNode.value?.uuid) {
+    message("请先选择一个结构节点", { type: "warning" });
+    return;
+  }
+  const uuid = selectedTreeNode.value.uuid;
+  viewerAdapter.showOnlyUUIDs([uuid]);
+  viewerAdapter.focusObjectByUUID(uuid);
+  displayMode.value = "selection";
+  syncLayerTreeSelection(getLayerKeysForTreeNode(selectedTreeNode.value));
+  await nextTick();
+  refreshSceneTree();
+  message(`已隔离显示：${selectedTreeNode.value.name || uuid}`, {
+    type: "success"
+  });
+}
+
+async function hideSelectedTreeNode() {
+  if (!selectedTreeNode.value?.uuid) {
+    message("请先选择一个结构节点", { type: "warning" });
+    return;
+  }
+  viewerAdapter.hideUUIDs([selectedTreeNode.value.uuid]);
+  await nextTick();
+  refreshSceneTree();
+  message(`已隐藏：${selectedTreeNode.value.name || "当前节点"}`, {
+    type: "success"
+  });
+}
+
+async function restoreHiddenTreeNodes() {
+  viewerAdapter.clearHiddenUUIDs();
+  await nextTick();
+  refreshSceneTree();
+  message("已恢复结构树隐藏项", { type: "success" });
+}
+
+async function showAllObjects() {
+  viewerAdapter.clearHiddenUUIDs();
+  viewerAdapter.clearIsolation();
+  viewerAdapter.filterVisibleUUIDs(null);
+  displayMode.value = "all";
+  syncLayerTreeSelection();
+  await nextTick();
+  refreshSceneTree();
+  message("已恢复全部构件显示", { type: "success" });
 }
 
 function handleViewerLoaded() {
@@ -4342,6 +4634,7 @@ watch(
       },
       setTreeFilterText: value => {
         treeFilterText.value = value;
+        structureModelTypeFilter.value = "all";
       },
       setSceneTree: value => {
         sceneTree.value = value;
@@ -4621,6 +4914,8 @@ onBeforeUnmount(() => {
           :measurement-mode="measurementMode"
           :measurement-mode-options="measurementModeOptions"
           :projection-mode="projectionMode"
+          :material-theme="materialTheme"
+          :display-mode="displayMode"
           :selected-count="selectedCount"
           :show-side-panel="showSidePanel"
           :runtime-clipping-state="runtimeClippingState"
@@ -4667,6 +4962,8 @@ onBeforeUnmount(() => {
           @clear-measurements="clearMeasurements"
           @export-measurements="exportMeasurements"
           @set-preset-view="setPresetView"
+          @set-material-theme="setMaterialTheme"
+          @apply-display-action="applyDisplayAction"
           @update:clipping-state="onClippingStateChange"
           @toggle-animation="toggleClippingAnimation"
           @update:animation-speed="clippingAnimationSpeed = $event"
@@ -4680,6 +4977,15 @@ onBeforeUnmount(() => {
         <Viewer2DWorkspace
           :show-side-panel="showSidePanel"
           :active-side-tab="activeSideTab"
+          :scene-tree="sceneTree"
+          :tree-v2-props="treeV2Props"
+          :tree-default-expanded-keys="treeDefaultExpandedKeys"
+          :tree-filter-text="treeFilterText"
+          :structure-model-type-filter="structureModelTypeFilter"
+          :structure-model-type-options="structureModelTypeOptions"
+          :structure-filter-method="structureFilterMethod"
+          :selected-tree-node="selectedTreeNode"
+          :mesh-opacity="meshOpacity"
           :navigation-tree-data="navigationTreeData"
           :current-nav-node-key="currentNavNodeKey"
           :selected-system-node-id="selectedSystemNodeId"
@@ -4719,9 +5025,25 @@ onBeforeUnmount(() => {
           :backend-state="backendState"
           :runtime-logs="runtimeLogs"
           :format-scheme-time="formatSchemeTime"
+          @structure-tree-ref-change="handleStructureTreeRefChange"
           @layer-tree-ref-change="handleLayerTreeRefChange"
           @update:active-side-tab="activeSideTab = $event"
-          @create-root-node="openCreateNavigationNodeDialog()"
+          @refresh-tree="refreshSceneTree"
+          @update:tree-filter-text="handleStructureFilterUpdate"
+          @update:structure-model-type-filter="
+            handleStructureModelTypeFilterUpdate
+          "
+          @tree-node-click="handleStructureNodeClick"
+          @tree-node-expand="handleTreeNodeExpand"
+          @tree-node-collapse="handleTreeNodeCollapse"
+          @focus-selected-node="focusSelectedNode"
+          @make-selected-mesh-transparent="makeSelectedMeshTransparent"
+          @restore-selected-mesh-opacity="restoreSelectedMeshOpacity"
+          @isolate-selected-node="isolateSelectedNode"
+          @show-all-objects="showAllObjects"
+          @hide-selected-node="hideSelectedTreeNode"
+          @restore-hidden-objects="restoreHiddenTreeNodes"
+          @update:mesh-opacity="handleMeshOpacityUpdate"
           @navigation-node-click="handleNavigationNodeClick"
           @navigation-node-contextmenu="handleNavTreeContextMenu"
           @update:selected-system-node-id="selectedSystemNodeId = $event"
@@ -4740,12 +5062,12 @@ onBeforeUnmount(() => {
           @update:anchor-markers-visible="anchorMarkersVisible = $event"
           @add-anchor="openCreateAnchorDialog('anchor')"
           @select-anchor="selectSceneAnchor($event, 'anchor')"
-          @edit-anchor="openEditAnchorDialog($event, 'anchor')"
+          @edit-anchor="selectAndEditSceneAnchor($event, 'anchor')"
           @remove-anchor="removeSceneAnchor($event, 'anchor')"
           @update:camera-markers-visible="cameraMarkersVisible = $event"
           @add-camera="openCreateAnchorDialog('camera')"
           @select-camera="openCameraVideo"
-          @edit-camera="openEditAnchorDialog($event, 'camera')"
+          @edit-camera="selectAndEditSceneAnchor($event, 'camera')"
           @remove-camera="removeSceneAnchor($event, 'camera')"
           @update:measurement-mode="setMeasurementMode"
           @focus-record="focusMeasurementRecord"
@@ -4755,6 +5077,7 @@ onBeforeUnmount(() => {
           @export-records="exportMeasurements"
           @add-model="openModelPicker"
           @select-model="activeSceneModelId = $event"
+          @locate-model="locateSceneModel"
           @remove-model="removeSceneModel"
           @refresh-model-options="loadAvailableModels(true)"
           @toggle-group="toggleAssetGroupVisibility"
@@ -4779,12 +5102,9 @@ onBeforeUnmount(() => {
 
         <ModelPickerDialog
           v-model="modelPickerVisible"
-          :model-picker-node-id="modelPickerNodeId"
           :model-picker-selection="modelPickerSelection"
-          :system-node-select-options="systemNodeSelectOptions"
           :selectable-model-options="selectableModelOptions"
           :loading-model-options="loadingModelOptions"
-          @update:model-picker-node-id="modelPickerNodeId = $event"
           @update:model-picker-selection="modelPickerSelection = $event"
           @confirm="confirmAddModels"
         />
@@ -4814,34 +5134,14 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <div class="dd-nav-ctx-item" @click.stop="onCtxCreateChildNode">
-              新增子节点
-            </div>
-            <div class="dd-nav-ctx-item" @click.stop="onCtxEditNode">
-              重命名节点
-            </div>
             <div class="dd-nav-ctx-item" @click.stop="onCtxBindDocuments">
               绑定文件
             </div>
             <div class="dd-nav-ctx-item" @click.stop="onCtxViewDocuments">
               查看绑定文件
             </div>
-            <div
-              class="dd-nav-ctx-item dd-nav-ctx-danger"
-              @click.stop="onCtxRemoveNode"
-            >
-              删除节点
-            </div>
           </template>
         </div>
-
-        <NavigationNodeDialog
-          v-model="navNodeDialogVisible"
-          :mode="navNodeDialogMode"
-          :label="navNodeForm.label"
-          @update:label="navNodeForm.label = $event"
-          @confirm="confirmNavigationNodeDialog"
-        />
 
         <DocumentBindingDialog
           v-model="documentDialogVisible"
@@ -4928,17 +5228,18 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dd-fullscreen {
+  --dd-gap: 12px;
+  --dd-topbar-height: 52px;
+  --dd-panels-top: 64px;
+  --dd-bottom-reserve: 120px;
+  --dd-panel-width: 420px; /* 原本360px，由于增加了垂直标签栏，拓宽以防止内容挤压 */
+
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: flex;
   flex-direction: column;
   background: var(--el-bg-color);
-  --dd-gap: 12px;
-  --dd-topbar-height: 52px;
-  --dd-panels-top: 64px;
-  --dd-bottom-reserve: 120px;
-  --dd-panel-width: 420px; /* 原本360px，由于增加了垂直标签栏，拓宽以防止内容挤压 */
 }
 
 .dd-topbar {
@@ -4960,24 +5261,24 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 9999;
   min-width: 120px;
+  padding: 4px 0;
   background: var(--el-bg-color-overlay);
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   box-shadow: var(--el-box-shadow-light);
-  padding: 4px 0;
 }
 
 .dd-nav-ctx-item {
   padding: 6px 16px;
   font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
   color: var(--el-text-color-regular);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .dd-nav-ctx-item:hover {
-  background: var(--el-fill-color-light);
   color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
 }
 
 .dd-nav-ctx-danger:hover {

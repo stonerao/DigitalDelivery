@@ -6,6 +6,7 @@ import SceneAnchorPanel from "../../panels/SceneAnchorPanel.vue";
 import MeasurementPanel from "../../panels/MeasurementPanel.vue";
 import AssetGroupPanel from "../../panels/AssetGroupPanel.vue";
 import RuntimeLinkagePanel from "../../panels/RuntimeLinkagePanel.vue";
+import StructurePanel from "../../panels/StructurePanel.vue";
 
 defineProps({
   showSidePanel: {
@@ -15,6 +16,42 @@ defineProps({
   activeSideTab: {
     type: String,
     default: "navigation"
+  },
+  sceneTree: {
+    type: Object,
+    default: null
+  },
+  treeV2Props: {
+    type: Object,
+    default: () => ({})
+  },
+  treeDefaultExpandedKeys: {
+    type: Array,
+    default: () => []
+  },
+  treeFilterText: {
+    type: String,
+    default: ""
+  },
+  structureModelTypeFilter: {
+    type: String,
+    default: "all"
+  },
+  structureModelTypeOptions: {
+    type: Array,
+    default: () => []
+  },
+  structureFilterMethod: {
+    type: Function,
+    default: () => true
+  },
+  selectedTreeNode: {
+    type: Object,
+    default: null
+  },
+  meshOpacity: {
+    type: Number,
+    default: 0.2
   },
   navigationTreeData: {
     type: Array,
@@ -175,9 +212,23 @@ defineProps({
 });
 
 const emit = defineEmits([
+  "structure-tree-ref-change",
   "layer-tree-ref-change",
   "update:activeSideTab",
-  "create-root-node",
+  "refresh-tree",
+  "update:treeFilterText",
+  "update:structureModelTypeFilter",
+  "tree-node-click",
+  "tree-node-expand",
+  "tree-node-collapse",
+  "focus-selected-node",
+  "make-selected-mesh-transparent",
+  "restore-selected-mesh-opacity",
+  "isolate-selected-node",
+  "show-all-objects",
+  "hide-selected-node",
+  "restore-hidden-objects",
+  "update:meshOpacity",
   "navigation-node-click",
   "navigation-node-contextmenu",
   "update:selectedSystemNodeId",
@@ -211,6 +262,7 @@ const emit = defineEmits([
   "export-records",
   "add-model",
   "select-model",
+  "locate-model",
   "remove-model",
   "refresh-model-options",
   "toggle-group",
@@ -227,6 +279,10 @@ const emit = defineEmits([
 function handleLayerTreeRefChange(instance) {
   emit("layer-tree-ref-change", instance || null);
 }
+
+function handleStructureTreeRefChange(instance) {
+  emit("structure-tree-ref-change", instance || null);
+}
 </script>
 
 <template>
@@ -238,6 +294,42 @@ function handleLayerTreeRefChange(instance) {
         class="dd-side-tabs h-full"
         @update:model-value="emit('update:activeSideTab', $event)"
       >
+        <el-tab-pane label="结构" name="structure">
+          <StructurePanel
+            :ref="handleStructureTreeRefChange"
+            :scene-tree="sceneTree"
+            :tree-v2-props="treeV2Props"
+            :tree-default-expanded-keys="treeDefaultExpandedKeys"
+            :tree-filter-text="treeFilterText"
+            :model-type-filter="structureModelTypeFilter"
+            :model-type-options="structureModelTypeOptions"
+            :filter-method="structureFilterMethod"
+            :selected-tree-node="selectedTreeNode"
+            :mesh-opacity="meshOpacity"
+            :active="activeSideTab === 'structure'"
+            @refresh-tree="emit('refresh-tree')"
+            @update:tree-filter-text="emit('update:treeFilterText', $event)"
+            @update:model-type-filter="
+              emit('update:structureModelTypeFilter', $event)
+            "
+            @tree-node-click="emit('tree-node-click', $event)"
+            @tree-node-expand="emit('tree-node-expand', $event)"
+            @tree-node-collapse="emit('tree-node-collapse', $event)"
+            @focus-selected-node="emit('focus-selected-node')"
+            @make-selected-mesh-transparent="
+              emit('make-selected-mesh-transparent')
+            "
+            @restore-selected-mesh-opacity="
+              emit('restore-selected-mesh-opacity')
+            "
+            @isolate-selected-node="emit('isolate-selected-node')"
+            @show-all-objects="emit('show-all-objects')"
+            @hide-selected-node="emit('hide-selected-node')"
+            @restore-hidden-objects="emit('restore-hidden-objects')"
+            @update:mesh-opacity="emit('update:meshOpacity', $event)"
+          />
+        </el-tab-pane>
+
         <el-tab-pane label="导航" name="navigation">
           <NavigationPanel
             :ref="handleLayerTreeRefChange"
@@ -251,7 +343,6 @@ function handleLayerTreeRefChange(instance) {
             :layer-checked-keys="layerCheckedKeys"
             :display-mode="displayMode"
             :display-mode-text="displayModeText"
-            @create-root-node="emit('create-root-node')"
             @navigation-node-click="emit('navigation-node-click', $event)"
             @navigation-node-contextmenu="
               emit('navigation-node-contextmenu', $event)
@@ -350,6 +441,7 @@ function handleLayerTreeRefChange(instance) {
             :active-lod-id="selectedLodId"
             @add-model="emit('add-model')"
             @select-model="emit('select-model', $event)"
+            @locate-model="emit('locate-model', $event)"
             @remove-model="emit('remove-model', $event)"
             @refresh-model-options="emit('refresh-model-options')"
             @toggle-group="emit('toggle-group', $event)"
@@ -389,16 +481,15 @@ function handleLayerTreeRefChange(instance) {
 }
 
 .dd-side-panel :deep(.el-card__body) {
-  padding: 20px 0 20px 20px;
-  height: 100%;
   box-sizing: border-box;
+  height: 100%;
+  padding: 20px 0 20px 20px;
 }
 
 .dd-side-tabs :deep(.el-tabs__content) {
   height: 100%;
   padding-right: 12px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden auto;
 }
 
 .dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar) {
@@ -413,8 +504,8 @@ function handleLayerTreeRefChange(instance) {
 .dd-side-tabs.el-tabs--right :deep(.el-tabs__item) {
   height: auto !important;
   padding: 16px 8px !important;
-  writing-mode: vertical-rl;
   letter-spacing: 4px;
+  writing-mode: vertical-rl;
 }
 
 .dd-side-tabs.el-tabs--right :deep(.el-tabs__item.is-active) {

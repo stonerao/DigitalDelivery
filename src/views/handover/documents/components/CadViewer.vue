@@ -10,13 +10,6 @@ import {
   watch
 } from "vue";
 import ElementPlus from "element-plus";
-import { i18n as cadViewerI18n, MlCadViewer } from "@mlightcad/cad-viewer";
-import {
-  AcApDocManager,
-  AcApSettingManager,
-  AcEdOpenMode,
-  eventBus
-} from "@mlightcad/cad-simple-viewer";
 
 defineOptions({ name: "CadViewer" });
 
@@ -36,6 +29,7 @@ const viewerState = reactive({
 
 const ROOT_DARK_CLASS = "dark";
 const ROOT_ML_THEME_ATTR = "data-ml-ui-theme";
+const CAD_GLOBAL_RESET_STYLE_ID = "dd-cad-viewer-global-reset";
 const ML_UI_CSS_VARS = [
   "--ml-ui-text",
   "--ml-ui-text-muted",
@@ -55,8 +49,49 @@ let cadApp = null;
 let loadAbortController = null;
 let rootThemeSnapshot = null;
 let rootThemeObserver = null;
-let restoreRootThemeTimer = null;
+let restoreRootThemeTimers = [];
 let trackedEventBusHandlers = [];
+let cadRuntime = null;
+let cadRuntimePromise = null;
+
+function loadCadRuntime() {
+  if (!cadRuntimePromise) {
+    cadRuntimePromise = Promise.all([
+      import("@mlightcad/cad-viewer"),
+      import("@mlightcad/cad-simple-viewer")
+    ]).then(([viewerModule, simpleViewerModule]) => {
+      cadRuntime = {
+        cadViewerI18n: viewerModule.i18n,
+        MlCadViewer: viewerModule.MlCadViewer,
+        AcApDocManager: simpleViewerModule.AcApDocManager,
+        AcApSettingManager: simpleViewerModule.AcApSettingManager,
+        AcEdOpenMode: simpleViewerModule.AcEdOpenMode,
+        eventBus: simpleViewerModule.eventBus
+      };
+      return cadRuntime;
+    });
+  }
+  return cadRuntimePromise;
+}
+
+function ensureCadViewerGlobalResetStyles() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(CAD_GLOBAL_RESET_STYLE_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = CAD_GLOBAL_RESET_STYLE_ID;
+  style.textContent = `
+body {
+  display: block;
+}
+
+html,
+body {
+  height: 100%;
+}
+`;
+  document.head.appendChild(style);
+}
 
 function ensureDwgFileName(name = "") {
   const trimmed = String(name || "").trim();
@@ -64,8 +99,8 @@ function ensureDwgFileName(name = "") {
   return /\.(dwg|dxf)$/i.test(trimmed) ? trimmed : `${trimmed}.dwg`;
 }
 
-function configureCadViewerSettings() {
-  const settings = AcApSettingManager.instance;
+function configureCadViewerSettings(runtime) {
+  const settings = runtime.AcApSettingManager.instance;
   settings.isShowCommandLine = false;
   settings.isShowCoordinate = true;
   settings.isShowEntityInfo = false;
@@ -90,23 +125,28 @@ function captureRootThemeState() {
   };
 }
 
-function restoreRootThemeSideEffects() {
-  if (!rootThemeSnapshot || typeof document === "undefined") return;
+function clearRootThemeRestoreTimers() {
+  if (typeof window !== "undefined") {
+    restoreRootThemeTimers.forEach(timer => window.clearTimeout(timer));
+  }
+  restoreRootThemeTimers = [];
+}
+
+function restoreRootThemeSideEffects(snapshot = rootThemeSnapshot) {
+  if (!snapshot || typeof document === "undefined") return;
 
   const root = document.documentElement;
-  root.classList.toggle(ROOT_DARK_CLASS, rootThemeSnapshot.hadDarkClass);
+  root.classList.toggle(ROOT_DARK_CLASS, snapshot.hadDarkClass);
 
-  if (rootThemeSnapshot.mlTheme === null) {
+  if (snapshot.mlTheme === null) {
     if (root.hasAttribute(ROOT_ML_THEME_ATTR)) {
       root.removeAttribute(ROOT_ML_THEME_ATTR);
     }
-  } else if (
-    root.getAttribute(ROOT_ML_THEME_ATTR) !== rootThemeSnapshot.mlTheme
-  ) {
-    root.setAttribute(ROOT_ML_THEME_ATTR, rootThemeSnapshot.mlTheme);
+  } else if (root.getAttribute(ROOT_ML_THEME_ATTR) !== snapshot.mlTheme) {
+    root.setAttribute(ROOT_ML_THEME_ATTR, snapshot.mlTheme);
   }
 
-  rootThemeSnapshot.mlVars.forEach(({ name, value, priority }) => {
+  snapshot.mlVars.forEach(({ name, value, priority }) => {
     if (value) {
       const currentValue = root.style.getPropertyValue(name);
       const currentPriority = root.style.getPropertyPriority(name);
@@ -119,22 +159,26 @@ function restoreRootThemeSideEffects() {
   });
 }
 
-function scheduleRootThemeRestore() {
-  restoreRootThemeSideEffects();
+function scheduleRootThemeRestore(snapshot = rootThemeSnapshot, delays = [0]) {
+  restoreRootThemeSideEffects(snapshot);
   if (typeof window === "undefined") return;
 
-  if (restoreRootThemeTimer) {
-    window.clearTimeout(restoreRootThemeTimer);
-  }
-  restoreRootThemeTimer = window.setTimeout(() => {
-    restoreRootThemeTimer = null;
-    restoreRootThemeSideEffects();
-  }, 0);
+  clearRootThemeRestoreTimers();
+  delays.forEach(delay => {
+    const timer = window.setTimeout(() => {
+      restoreRootThemeTimers = restoreRootThemeTimers.filter(
+        item => item !== timer
+      );
+      restoreRootThemeSideEffects(snapshot);
+    }, delay);
+    restoreRootThemeTimers.push(timer);
+  });
 }
 
 function startRootThemeGuard() {
   if (rootThemeSnapshot || typeof document === "undefined") return;
 
+  clearRootThemeRestoreTimers();
   rootThemeSnapshot = captureRootThemeState();
   if (!rootThemeSnapshot || typeof MutationObserver === "undefined") return;
 
@@ -148,21 +192,20 @@ function startRootThemeGuard() {
 }
 
 function stopRootThemeGuard() {
+  const snapshot = rootThemeSnapshot;
+
   if (rootThemeObserver) {
     rootThemeObserver.disconnect();
     rootThemeObserver = null;
   }
 
-  if (restoreRootThemeTimer && typeof window !== "undefined") {
-    window.clearTimeout(restoreRootThemeTimer);
-    restoreRootThemeTimer = null;
-  }
-
-  restoreRootThemeSideEffects();
+  clearRootThemeRestoreTimers();
+  scheduleRootThemeRestore(snapshot, [0, 16, 64, 250, 1000, 3000]);
   rootThemeSnapshot = null;
 }
 
-function trackEventBusHandlers(run) {
+function trackEventBusHandlers(runtime, run) {
+  const { eventBus } = runtime;
   const originalOn = eventBus.on;
   eventBus.on = function trackedOn(type, handler) {
     trackedEventBusHandlers.push({ type, handler });
@@ -177,17 +220,36 @@ function trackEventBusHandlers(run) {
 }
 
 function clearTrackedEventBusHandlers() {
+  if (!cadRuntime?.eventBus) {
+    trackedEventBusHandlers = [];
+    return;
+  }
+
   trackedEventBusHandlers.forEach(({ type, handler }) => {
-    eventBus.off(type, handler);
+    cadRuntime.eventBus.off(type, handler);
   });
   trackedEventBusHandlers = [];
 }
 
-function mountCadApp() {
+async function mountCadApp(signal) {
   if (cadApp || !hostRef.value) return;
 
   startRootThemeGuard();
-  configureCadViewerSettings();
+  let runtime;
+  try {
+    runtime = await loadCadRuntime();
+  } catch (error) {
+    stopRootThemeGuard();
+    throw error;
+  }
+  ensureCadViewerGlobalResetStyles();
+  if (signal?.aborted || cadApp || !hostRef.value) {
+    stopRootThemeGuard();
+    return;
+  }
+
+  configureCadViewerSettings(runtime);
+  const { MlCadViewer, cadViewerI18n, AcEdOpenMode } = runtime;
 
   cadApp = createApp({
     name: "MlightCadViewerHost",
@@ -206,7 +268,7 @@ function mountCadApp() {
   cadApp.use(cadViewerI18n);
   cadApp.use(ElementPlus);
   try {
-    trackEventBusHandlers(() => {
+    trackEventBusHandlers(runtime, () => {
       cadApp.mount(hostRef.value);
     });
     scheduleRootThemeRestore();
@@ -219,7 +281,7 @@ function mountCadApp() {
 }
 
 function releaseCadRuntimeResources() {
-  const docManager = AcApDocManager._instance;
+  const docManager = cadRuntime?.AcApDocManager?._instance;
   const view = docManager?.curView;
   if (!view) return;
 
@@ -238,12 +300,17 @@ function releaseCadRuntimeResources() {
 }
 
 function unmountCadApp() {
-  if (!cadApp) return;
+  if (!cadApp) {
+    stopRootThemeGuard();
+    ensureCadViewerGlobalResetStyles();
+    return;
+  }
   releaseCadRuntimeResources();
   cadApp.unmount();
   clearTrackedEventBusHandlers();
   cadApp = null;
   stopRootThemeGuard();
+  ensureCadViewerGlobalResetStyles();
 }
 
 async function createLocalFile(url, signal) {
@@ -290,7 +357,7 @@ async function loadDocument(url) {
 
     viewerState.localFile = file;
     await nextTick();
-    mountCadApp();
+    await mountCadApp(controller.signal);
   } catch (error) {
     if (error?.name === "AbortError") return;
     errorText.value = error?.message || "DWG 文件预览失败";
@@ -325,8 +392,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dd-cad-viewer">
-    
-
     <div class="dd-cad-stage">
       <div ref="hostRef" class="dd-ml-cad-host dark" />
       <div
@@ -351,18 +416,18 @@ onBeforeUnmount(() => {
 }
 
 .dd-cad-viewer {
-  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
 }
 
 .dd-cad-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 
 .dd-cad-title {
@@ -384,18 +449,13 @@ onBeforeUnmount(() => {
   position: relative;
   height: min(68vh, 720px);
   min-height: 520px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
   overflow: hidden;
   background: #0f172a;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
 }
 
 .dd-ml-cad-host {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  color-scheme: dark;
-  color: var(--el-text-color-regular);
   --el-color-primary: #409eff;
   --el-color-info: #909399;
   --el-color-danger: #f56c6c;
@@ -415,26 +475,32 @@ onBeforeUnmount(() => {
   --el-fill-color-light: #262727;
   --el-fill-color-lighter: #1d1d1d;
   --el-fill-color-blank: #141414;
-  --el-mask-color: rgba(0, 0, 0, 0.8);
-  --el-mask-color-extra-light: rgba(0, 0, 0, 0.3);
+  --el-mask-color: rgb(0 0 0 / 80%);
+  --el-mask-color-extra-light: rgb(0 0 0 / 30%);
   --el-box-shadow:
-    0 12px 32px 4px rgba(0, 0, 0, 0.36), 0 8px 20px rgba(0, 0, 0, 0.72);
+    0 12px 32px 4px rgb(0 0 0 / 36%), 0 8px 20px rgb(0 0 0 / 72%);
   --ml-ui-text: var(--el-text-color-primary);
   --ml-ui-text-muted: var(--el-text-color-regular);
   --ml-ui-bg: var(--el-bg-color-overlay);
   --ml-ui-border: var(--el-border-color);
   --ml-ui-shadow: var(--el-box-shadow);
-  --ml-ui-overlay: rgba(0, 0, 0, 0.5);
+  --ml-ui-overlay: rgb(0 0 0 / 50%);
   --ml-ui-accent: var(--el-color-primary);
   --ml-ui-accent-alt: var(--el-color-info);
   --ml-ui-danger: var(--el-color-danger);
   --ml-ui-canvas-line: var(--el-color-primary);
-  --ml-ui-canvas-fill: rgba(64, 158, 255, 0.2);
+  --ml-ui-canvas-fill: rgb(64 158 255 / 20%);
   --ml-ui-canvas-fill-mix: color-mix(
     in srgb,
     var(--el-color-primary) 20%,
     transparent
   );
+
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--el-text-color-regular);
+  color-scheme: dark;
 }
 
 .dd-cad-tip {
@@ -445,26 +511,26 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.88);
   text-align: center;
+  background: rgb(15 23 42 / 88%);
 }
 
 .dd-ml-cad-host :deep(.ml-cad-container) {
   position: absolute;
   inset: 0;
+  z-index: 1;
   width: 100%;
   height: 100%;
-  outline: none;
-  z-index: 1;
   pointer-events: auto;
+  outline: none;
 }
 
 .dd-ml-cad-host :deep(.ml-cad-viewer-container) {
   position: absolute;
   inset: 0;
+  z-index: 2;
   width: 100%;
   height: 100%;
-  z-index: 2;
   pointer-events: none;
 }
 

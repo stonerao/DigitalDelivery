@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  defineAsyncComponent,
   nextTick,
   onBeforeUnmount,
   ref,
@@ -22,7 +23,7 @@ import OfficeViewer from "./OfficeViewer.vue";
 import TextViewer from "./TextViewer.vue";
 import ImageViewer from "./ImageViewer.vue";
 import MediaViewer from "./MediaViewer.vue";
-import CadViewer from "./CadViewer.vue";
+const CadViewer = defineAsyncComponent(() => import("./CadViewer.vue"));
 
 defineOptions({ name: "FilePreview" });
 
@@ -329,9 +330,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .dd-file-preview-headerbar {
   display: flex;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
   width: 100%;
 }
 
@@ -344,9 +345,9 @@ onBeforeUnmount(() => {
 
 .dd-file-preview-header-actions {
   display: flex;
-  align-items: center;
   flex: 0 0 auto;
   gap: 4px;
+  align-items: center;
   padding-right: 2px;
 }
 
@@ -384,9 +385,9 @@ onBeforeUnmount(() => {
 
 .dd-file-preview-empty {
   display: flex;
-  min-height: 160px;
   align-items: center;
   justify-content: center;
+  min-height: 160px;
   padding: 24px;
   text-align: center;
 }

@@ -74,6 +74,14 @@ const props = defineProps({
     type: String,
     default: ""
   },
+  materialTheme: {
+    type: String,
+    default: "original"
+  },
+  displayMode: {
+    type: String,
+    default: "all"
+  },
   selectedCount: {
     type: Number,
     default: 0
@@ -192,6 +200,8 @@ const emit = defineEmits([
   "clear-measurements",
   "export-measurements",
   "set-preset-view",
+  "set-material-theme",
+  "apply-display-action",
   "update:clippingState",
   "toggle-animation",
   "update:animationSpeed",
@@ -246,6 +256,9 @@ watch(
       :measurement-mode="measurementMode"
       :measurement-mode-options="measurementModeOptions"
       :projection-mode="projectionMode"
+      :material-theme="materialTheme"
+      :display-mode="displayMode"
+      :selected-object-info="selectedObjectInfo"
       :selected-count="selectedCount"
       @update:active-tool="emit('update:activeTool', $event)"
       @update:measurement-mode="emit('update:measurementMode', $event)"
@@ -263,6 +276,8 @@ watch(
       @clear-measurements="emit('clear-measurements')"
       @export-measurements="emit('export-measurements')"
       @set-preset-view="emit('set-preset-view', $event)"
+      @set-material-theme="emit('set-material-theme', $event)"
+      @apply-display-action="emit('apply-display-action', $event)"
     />
 
     <ClippingPanel

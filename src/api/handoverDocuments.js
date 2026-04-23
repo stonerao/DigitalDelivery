@@ -78,10 +78,22 @@ export const downloadHandoverDocumentFile = (id, axiosConfig = {}) => {
   );
 };
 
-export const batchDownloadHandoverDocuments = data => {
-  return http.request("post", "/api/handover/documents/batchDownload", {
-    data
-  });
+export const batchDownloadHandoverDocuments = (data, axiosConfig = {}) => {
+  return http.request(
+    "post",
+    "/api/handover/documents/batchDownload",
+    {
+      data
+    },
+    {
+      ...axiosConfig,
+      responseType: "blob",
+      headers: {
+        Accept: "*/*",
+        ...(axiosConfig.headers || {})
+      }
+    }
+  );
 };
 
 export const getHandoverDocFolderTree = () => {

@@ -57,6 +57,8 @@ export function createViewerAdapter() {
     filterVisibleUUIDs: uuidsOrNull =>
       invoke("filterVisibleUUIDs", uuidsOrNull),
     clearIsolation: () => invoke("clearIsolation"),
+    hideUUIDs: uuids => invoke("hideUUIDs", uuids),
+    clearHiddenUUIDs: () => invoke("clearHiddenUUIDs"),
     setMeshOpacityByUUID: (uuid, opacity) =>
       invoke("setMeshOpacityByUUID", uuid, opacity),
     toggleFirstPerson: force => invoke("toggleFirstPerson", force),

@@ -80,6 +80,8 @@ export const useViewer3dRuntimeStore = defineStore("viewer3d-runtime", {
         business: "已绑定业务设备",
         system: "当前系统",
         selection: "当前设备",
+        model: "当前模型",
+        type: "当前类型",
         tree: "分层树筛选"
       };
       return map[state.displayMode] || "全部构件";

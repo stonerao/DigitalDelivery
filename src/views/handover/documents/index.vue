@@ -670,26 +670,19 @@ function batchDownload() {
     return;
   }
 
-  if (rows.length === 1) {
-    downloadRow(rows[0]);
-    return;
-  }
-
   isBatchZipping.value = true;
   downloadProgressText.value = "正在准备批量下载…";
   batchDownloadHandoverDocuments({
     ids: rows.map(r => r.id)
   })
-    .then(res => {
-      const data = unwrapApiData(res, "批量下载失败");
-      const url = data?.url || "";
-      if (!url) throw new Error("后端未返回批量下载地址");
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `documents_${new Date().toISOString().slice(0, 10)}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+    .then(response => {
+      return unwrapHandoverDocumentFileResponse(response, "批量下载失败");
+    })
+    .then(blob => {
+      const fileName = `documents_${new Date().toISOString().slice(0, 10)}.zip`;
+      if (!triggerHandoverDocumentDownload(blob, fileName)) {
+        throw new Error("浏览器不支持当前下载方式");
+      }
       message("批量下载已开始", { type: "success" });
     })
     .catch(err => {
@@ -701,34 +694,83 @@ function batchDownload() {
     });
 }
 
-function batchDelete() {
+function isMessageBoxCancel(error) {
+  return (
+    error === "cancel" ||
+    error === "close" ||
+    error?.action === "cancel" ||
+    error?.action === "close"
+  );
+}
+
+async function confirmDocumentDelete({
+  title,
+  content,
+  confirmButtonText = "删除",
+  type = "warning"
+}) {
+  try {
+    await ElMessageBox.confirm(content, title, {
+      confirmButtonText,
+      cancelButtonText: "取消",
+      type,
+      distinguishCancelAndClose: true,
+      closeOnClickModal: false
+    });
+    return true;
+  } catch (error) {
+    if (isMessageBoxCancel(error)) return false;
+    throw error;
+  }
+}
+
+function formatDeleteNames(rows) {
+  const names = rows
+    .slice(0, 3)
+    .map(row => `“${row.name || "未命名文档"}”`)
+    .join("、");
+  return rows.length > 3 ? `${names} 等 ${rows.length} 项` : names;
+}
+
+async function batchDelete() {
   const rows = selectedRows.value || [];
   if (!rows.length) {
     message("请先勾选要删除的文档", { type: "warning" });
     return;
   }
-  deleteHandoverDocuments({ ids: rows.map(r => r.id) })
-    .then(() => {
-      selectedRows.value = [];
-      message(`已移入回收站 ${rows.length} 项`, { type: "success" });
-      loadDocuments();
-    })
-    .catch(error => {
-      console.error("batch delete documents failed", error);
-      message("批量删除失败", { type: "error" });
-    });
+
+  const confirmed = await confirmDocumentDelete({
+    title: "批量删除文档",
+    content: `确认删除 ${formatDeleteNames(rows)} 吗？删除后文档将移入回收站。`
+  });
+  if (!confirmed) return;
+
+  try {
+    await deleteHandoverDocuments({ ids: rows.map(r => r.id) });
+    selectedRows.value = [];
+    message(`已移入回收站 ${rows.length} 项`, { type: "success" });
+    loadDocuments();
+  } catch (error) {
+    console.error("batch delete documents failed", error);
+    message("批量删除失败", { type: "error" });
+  }
 }
 
-function deleteRow(row) {
-  deleteHandoverDocuments({ ids: [row.id] })
-    .then(() => {
-      message("已移入回收站", { type: "success" });
-      loadDocuments();
-    })
-    .catch(error => {
-      console.error("delete document failed", error);
-      message("删除失败", { type: "error" });
-    });
+async function deleteRow(row) {
+  const confirmed = await confirmDocumentDelete({
+    title: "删除文档",
+    content: `确认删除文档“${row.name || "未命名文档"}”吗？删除后文档将移入回收站。`
+  });
+  if (!confirmed) return;
+
+  try {
+    await deleteHandoverDocuments({ ids: [row.id] });
+    message("已移入回收站", { type: "success" });
+    loadDocuments();
+  } catch (error) {
+    console.error("delete document failed", error);
+    message("删除失败", { type: "error" });
+  }
 }
 
 function restoreRow(row) {
@@ -743,16 +785,23 @@ function restoreRow(row) {
     });
 }
 
-function purgeRow(row) {
-  purgeHandoverDocuments({ ids: [row.id] })
-    .then(() => {
-      message("已彻底删除", { type: "success" });
-      loadDocuments();
-    })
-    .catch(error => {
-      console.error("purge document failed", error);
-      message("彻底删除失败", { type: "error" });
-    });
+async function purgeRow(row) {
+  const confirmed = await confirmDocumentDelete({
+    title: "彻底删除文档",
+    content: `确认彻底删除文档“${row.name || "未命名文档"}”吗？此操作不可恢复。`,
+    confirmButtonText: "彻底删除",
+    type: "error"
+  });
+  if (!confirmed) return;
+
+  try {
+    await purgeHandoverDocuments({ ids: [row.id] });
+    message("已彻底删除", { type: "success" });
+    loadDocuments();
+  } catch (error) {
+    console.error("purge document failed", error);
+    message("彻底删除失败", { type: "error" });
+  }
 }
 
 const assocVisible = ref(false);
@@ -1077,6 +1126,14 @@ function confirmFolderMove() {
     });
 }
 
+function formatFolderDeleteErrorMessage(error) {
+  const text = String(error?.message || "").trim();
+  if (text.includes("目录不为空")) {
+    return "目录不为空，无法删除。请先删除或移动目录内的文档及子目录。";
+  }
+  return text || "目录删除失败";
+}
+
 async function removeFolder(node) {
   closeFolderContextMenu();
   if (isFolderProtected(node)) {
@@ -1094,9 +1151,10 @@ async function removeFolder(node) {
         cancelButtonText: "取消"
       }
     );
-    await deleteHandoverDocFolder({
+    const response = await deleteHandoverDocFolder({
       ids: [node.id]
     });
+    unwrapApiData(response, "目录删除失败");
     if (selectedFolderId.value === node.id) {
       selectedFolderId.value = node.parentId || ROOT_FOLDER_ID;
     }
@@ -1108,7 +1166,7 @@ async function removeFolder(node) {
       return;
     }
     console.error("delete folder failed", error);
-    message(error?.message || "目录删除失败", { type: "error" });
+    message(formatFolderDeleteErrorMessage(error), { type: "error" });
   }
 }
 

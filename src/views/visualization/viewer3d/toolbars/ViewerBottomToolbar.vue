@@ -2,17 +2,24 @@
 import { computed } from "vue";
 import {
   Aim,
+  ArrowDown,
   Camera,
   CollectionTag,
   Crop,
+  Hide,
   Pointer,
   Position,
   RefreshRight,
   Right,
   ScaleToOriginal,
+  View,
   ZoomIn,
   ZoomOut
 } from "@element-plus/icons-vue";
+import {
+  VIEWER_DISPLAY_ACTION_OPTIONS,
+  VIEWER_MATERIAL_THEME_OPTIONS
+} from "../services/viewerToolbarConfig";
 
 defineOptions({
   name: "ViewerBottomToolbar"
@@ -59,6 +66,18 @@ const props = defineProps({
     type: String,
     default: "perspective"
   },
+  materialTheme: {
+    type: String,
+    default: "original"
+  },
+  displayMode: {
+    type: String,
+    default: "all"
+  },
+  selectedObjectInfo: {
+    type: Object,
+    default: null
+  },
   selectedCount: {
     type: Number,
     default: 0
@@ -81,7 +100,9 @@ const emit = defineEmits([
   "clear-measurements",
   "export-measurements",
   "update:measurement-mode",
-  "set-preset-view"
+  "set-preset-view",
+  "set-material-theme",
+  "apply-display-action"
 ]);
 
 function onToolChange(value) {
@@ -104,6 +125,30 @@ const extraTools = computed(() => {
 
 const quickViews = computed(() => {
   return (props.presetViews || []).slice(0, 4);
+});
+
+const materialThemeOptions = computed(() => VIEWER_MATERIAL_THEME_OPTIONS);
+
+const displayActionOptions = computed(() => VIEWER_DISPLAY_ACTION_OPTIONS);
+
+const hasSelectedObject = computed(() =>
+  Boolean(
+    props.selectedObjectInfo?.objectUuid || props.selectedObjectInfo?.uuid
+  )
+);
+
+const materialThemeLabel = computed(() => {
+  return (
+    materialThemeOptions.value.find(item => item.value === props.materialTheme)
+      ?.label || "视图"
+  );
+});
+
+const displayModeLabel = computed(() => {
+  return (
+    displayActionOptions.value.find(item => item.mode === props.displayMode)
+      ?.label || "显示"
+  );
 });
 
 function getToolLabel(item) {
@@ -135,6 +180,10 @@ function getToolIcon(value) {
   if (value === "measure") return Crop;
   if (value === "pick") return Pointer;
   return Right;
+}
+
+function isDisplayActionActive(item) {
+  return item?.mode && props.displayMode === item.mode;
 }
 </script>
 
@@ -187,6 +236,70 @@ function getToolIcon(value) {
           >
             {{ item.label }}
           </button>
+        </div>
+
+        <div class="dd-toolbar-group">
+          <el-dropdown
+            trigger="click"
+            placement="top"
+            popper-class="dd-toolbar-popper"
+          >
+            <button
+              type="button"
+              class="dd-toolbar-btn"
+              :class="{ 'is-active': materialTheme !== 'original' }"
+              :title="`当前视图：${materialThemeLabel}`"
+            >
+              <el-icon class="dd-toolbar-icon"><View /></el-icon>
+              视图
+              <el-icon class="dd-toolbar-caret"><ArrowDown /></el-icon>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="item in materialThemeOptions"
+                  :key="item.value"
+                  :class="{ 'is-active': materialTheme === item.value }"
+                  @click="emit('set-material-theme', item.value)"
+                >
+                  {{ item.label }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+
+          <el-dropdown
+            trigger="click"
+            placement="top"
+            popper-class="dd-toolbar-popper"
+          >
+            <button
+              type="button"
+              class="dd-toolbar-btn"
+              :class="{ 'is-active': displayMode !== 'all' }"
+              :title="`当前显示：${displayModeLabel}`"
+            >
+              <el-icon class="dd-toolbar-icon"><Hide /></el-icon>
+              显示
+              <el-icon class="dd-toolbar-caret"><ArrowDown /></el-icon>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="item in displayActionOptions"
+                  :key="item.value"
+                  :class="{
+                    'is-active': isDisplayActionActive(item),
+                    'is-selection-action':
+                      item.needsSelection && !hasSelectedObject
+                  }"
+                  @click="emit('apply-display-action', item.value)"
+                >
+                  {{ item.label }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
 
         <div class="dd-toolbar-group">
@@ -345,8 +458,8 @@ function getToolIcon(value) {
 <style scoped>
 .dd-bottombar {
   position: absolute;
-  left: 50%;
   bottom: 14px;
+  left: 50%;
   z-index: 30;
   transform: translateX(-50%);
 }
@@ -358,13 +471,12 @@ function getToolIcon(value) {
   width: max-content;
   max-width: calc(100vw - 24px);
   padding: 8px 10px;
+  overflow: auto hidden;
+  scrollbar-width: none;
+  background: var(--el-bg-color-overlay);
   border: 1px solid var(--el-border-color-light);
   border-radius: 10px;
-  background: var(--el-bg-color-overlay);
   box-shadow: var(--el-box-shadow-light);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
 }
 
 .dd-bottombar-shell::-webkit-scrollbar {
@@ -380,8 +492,8 @@ function getToolIcon(value) {
 .dd-bottombar-row {
   display: flex;
   flex-wrap: nowrap;
-  justify-content: center;
   gap: 6px;
+  justify-content: center;
   width: max-content;
 }
 
@@ -391,31 +503,31 @@ function getToolIcon(value) {
 
 .dd-toolbar-group {
   display: inline-flex;
-  align-items: center;
+  flex: none;
   gap: 4px;
+  align-items: center;
   padding: 4px;
+  background: var(--el-fill-color-extra-light);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
-  background: var(--el-fill-color-extra-light);
-  flex: none;
 }
 
 .dd-toolbar-btn {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
   min-width: 40px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-regular);
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
+  color: var(--el-text-color-regular);
   white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
+  background: var(--el-bg-color);
+  border: 1px solid transparent;
+  border-radius: 6px;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -423,20 +535,20 @@ function getToolIcon(value) {
 }
 
 .dd-toolbar-btn-icon {
-  min-width: 28px;
   width: 28px;
+  min-width: 28px;
   padding: 0;
 }
 
 .dd-toolbar-btn:hover {
-  border-color: var(--el-border-color);
   background: var(--el-fill-color-light);
+  border-color: var(--el-border-color);
 }
 
 .dd-toolbar-btn.is-active {
-  border-color: var(--el-color-primary-light-5);
-  background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
   box-shadow: none;
 }
 
@@ -445,8 +557,8 @@ function getToolIcon(value) {
 }
 
 .dd-toolbar-btn.is-static:hover {
-  border-color: transparent;
   background: var(--el-bg-color);
+  border-color: transparent;
 }
 
 .dd-toolbar-btn-danger {
@@ -455,20 +567,25 @@ function getToolIcon(value) {
 
 .dd-toolbar-status {
   display: inline-flex;
-  align-items: center;
   gap: 6px;
+  align-items: center;
 }
 
 .dd-toolbar-icon {
   font-size: 12px;
 }
 
+.dd-toolbar-caret {
+  margin-left: 0;
+  font-size: 10px;
+}
+
 .dd-toolbar-dot {
+  flex: none;
   width: 5px;
   height: 5px;
-  border-radius: 999px;
   background: var(--el-text-color-placeholder);
-  flex: none;
+  border-radius: 999px;
 }
 
 .dd-toolbar-status.is-active .dd-toolbar-dot {
@@ -477,16 +594,16 @@ function getToolIcon(value) {
 
 .dd-toolbar-hint {
   padding: 0 4px;
-  color: var(--el-text-color-secondary);
   font-size: 11px;
   line-height: 1.4;
+  color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 
-@media (max-width: 1200px) {
+@media (width <= 1200px) {
   .dd-bottombar {
-    left: 12px;
     right: 12px;
+    left: 12px;
     transform: none;
   }
 
@@ -497,5 +614,14 @@ function getToolIcon(value) {
   .dd-bottombar-row {
     justify-content: flex-start;
   }
+}
+
+:global(.dd-toolbar-popper .el-dropdown-menu__item.is-active) {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+:global(.dd-toolbar-popper .el-dropdown-menu__item.is-selection-action) {
+  color: var(--el-text-color-secondary);
 }
 </style>

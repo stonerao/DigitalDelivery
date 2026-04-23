@@ -108,15 +108,19 @@ let qualityReloadInProgress = false;
 let isDestroying = false;
 
 function createSceneModelInstance(item = {}, index = 0) {
+  const modelId = String(item.modelId || item.id || "").trim();
+  const modelUrl = String(item.modelUrl || item.url || "").trim();
   return {
-    instanceId:
+    instanceId: String(
       item.instanceId ||
-      `scene-model-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
-    modelId: String(item.modelId || item.id || "").trim(),
+        item.instance_id ||
+        `${modelId || modelUrl || "scene-model"}-${index}`
+    ).trim(),
+    modelId,
     modelName: String(
       item.modelName || item.name || `模型 ${index + 1}`
     ).trim(),
-    modelUrl: String(item.modelUrl || item.url || "").trim(),
+    modelUrl,
     visible: item.visible !== false,
     transform: {
       position: Array.isArray(item.transform?.position)
@@ -152,6 +156,31 @@ const resolvedSceneModels = computed(() => {
 });
 
 const hasModelInput = computed(() => resolvedSceneModels.value.length > 0);
+
+function getSceneModelResourceSignature(models = resolvedSceneModels.value) {
+  return (models || [])
+    .map(item =>
+      [item.instanceId || "", item.modelId || "", item.modelUrl || ""].join(
+        "::"
+      )
+    )
+    .join("||");
+}
+
+function getSceneModelRuntimeSignature(models = resolvedSceneModels.value) {
+  return (models || [])
+    .map(item =>
+      [
+        item.instanceId || "",
+        item.modelName || "",
+        item.visible === false ? "0" : "1",
+        (item.transform?.position || []).join(","),
+        (item.transform?.rotation || []).join(","),
+        (item.transform?.scale || []).join(",")
+      ].join("::")
+    )
+    .join("||");
+}
 
 const TEXTURE_KEYS = [
   "map",
@@ -547,6 +576,9 @@ const emit = defineEmits([
 const rootRef = ref(null);
 const loading = ref(false);
 const loadProgress = ref(0);
+const loadingModelIndex = ref(0);
+const loadingModelTotal = ref(0);
+const loadingModelName = ref("");
 const errorText = ref("");
 const modelStats = ref({ vertices: 0, triangles: 0, meshCount: 0 });
 
@@ -567,6 +599,7 @@ let lastAdaptiveUpdateAt = 0;
 let lastFrameAt = 0;
 let lastRenderAt = 0;
 let lastInteractionAt = 0;
+let loadedSceneModelResourceSignature = "";
 
 let pointerDown = null;
 let onPointerDown;
@@ -582,6 +615,8 @@ let onPointerLockChange;
 
 const meshOpacityOverrides = new Map();
 const visibilityOverrides = new Map();
+const hiddenTargetUUIDs = new Set();
+const hiddenVisibilityOverrides = new Map();
 const isFirstPerson = ref(false);
 const firstPersonKeys = {
   KeyW: false,
@@ -784,6 +819,7 @@ function createBadgeSprite(text, color, options = {}) {
     transparent: true,
     sizeAttenuation: options.sizeAttenuation !== false
   });
+  material.userData.ownsTexture = true;
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(
     (options.scaleX || canvas.width / 120) * viewportScale,
@@ -814,6 +850,7 @@ function createImageSprite(texture, options = {}) {
     depthWrite: false,
     sizeAttenuation: useSizeAttenuation
   });
+  material.userData.ownsTexture = Boolean(options.ownsTexture);
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(
     (options.scaleX || 0.5) * viewportScale * attenuationBoost,
@@ -916,7 +953,9 @@ function clearAnchorObjects(targetGroup, targetMap) {
     const child = targetGroup.children.pop();
     child.traverse?.(node => {
       node.geometry?.dispose?.();
-      if (node.material?.map?.dispose) node.material.map.dispose();
+      if (node.material?.userData?.ownsTexture && node.material?.map?.dispose) {
+        node.material.map.dispose();
+      }
       node.material?.dispose?.();
     });
   }
@@ -1707,14 +1746,73 @@ function setMeshOpacityByUUID(uuid, opacity = 0.2) {
   return true;
 }
 
-function clearIsolation() {
-  if (!visibilityOverrides.size) return true;
-  visibilityOverrides.forEach((visible, uuid) => {
-    const obj = findObjectByUUID(uuid);
-    if (obj) obj.visible = visible;
-  });
-  visibilityOverrides.clear();
+function isVisibilityManagedObject(obj) {
+  return Boolean(obj && !obj.userData?.isHelper && !obj.userData?.isMeasure);
+}
+
+function markVisibilityStateDirty() {
   objectPicker?.markSceneTreeDirty?.();
+  measureTool?.refreshPickTargets?.();
+  objectPicker?.refreshPickTargets?.();
+  noteUserInteraction();
+}
+
+function restoreHiddenVisibility() {
+  if (!hiddenVisibilityOverrides.size) return false;
+  let changed = false;
+  hiddenVisibilityOverrides.forEach((visible, uuid) => {
+    const obj = findObjectByUUID(uuid);
+    if (obj && obj.visible !== visible) {
+      obj.visible = visible;
+      changed = true;
+    }
+  });
+  hiddenVisibilityOverrides.clear();
+  return changed;
+}
+
+function applyHiddenVisibility() {
+  if (!hiddenTargetUUIDs.size) return false;
+  let changed = false;
+
+  hiddenTargetUUIDs.forEach(uuid => {
+    const target = findObjectByUUID(uuid);
+    if (!target) return;
+
+    target.traverse(obj => {
+      if (!isVisibilityManagedObject(obj)) return;
+      if (!hiddenVisibilityOverrides.has(obj.uuid)) {
+        hiddenVisibilityOverrides.set(obj.uuid, obj.visible);
+      }
+      if (obj.visible !== false) {
+        obj.visible = false;
+        changed = true;
+      }
+    });
+  });
+
+  return changed;
+}
+
+function clearIsolation(options = {}) {
+  const shouldApplyHidden = options?.applyHidden !== false;
+  let changed = restoreHiddenVisibility();
+
+  if (visibilityOverrides.size) {
+    visibilityOverrides.forEach((visible, uuid) => {
+      const obj = findObjectByUUID(uuid);
+      if (obj && obj.visible !== visible) {
+        obj.visible = visible;
+        changed = true;
+      }
+    });
+    visibilityOverrides.clear();
+  }
+
+  if (shouldApplyHidden) {
+    changed = applyHiddenVisibility() || changed;
+  }
+  if (changed) markVisibilityStateDirty();
   return true;
 }
 
@@ -1723,13 +1821,13 @@ function isolateByUUID(uuid) {
   if (!target) return false;
 
   // 先恢复上一次隔离状态
-  clearIsolation();
+  clearIsolation({ applyHidden: false });
 
   const keep = new Set();
 
   // 保留：目标子树
   target.traverse(obj => {
-    if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+    if (!isVisibilityManagedObject(obj)) return;
     keep.add(obj.uuid);
   });
 
@@ -1743,8 +1841,7 @@ function isolateByUUID(uuid) {
 
   // 对 modelGroup 下的对象做可见性隔离
   modelGroup.traverse(obj => {
-    if (!obj) return;
-    if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+    if (!isVisibilityManagedObject(obj)) return;
 
     const shouldVisible = keep.has(obj.uuid);
     if (obj.visible !== shouldVisible) {
@@ -1753,7 +1850,8 @@ function isolateByUUID(uuid) {
     }
   });
 
-  objectPicker?.markSceneTreeDirty?.();
+  applyHiddenVisibility();
+  markVisibilityStateDirty();
 
   return true;
 }
@@ -1763,7 +1861,7 @@ function showOnlyUUIDs(uuids = []) {
     return clearIsolation();
   }
 
-  clearIsolation();
+  clearIsolation({ applyHidden: false });
 
   const keep = new Set([modelGroup.uuid]);
 
@@ -1772,7 +1870,7 @@ function showOnlyUUIDs(uuids = []) {
     if (!target) return;
 
     target.traverse(obj => {
-      if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+      if (!isVisibilityManagedObject(obj)) return;
       keep.add(obj.uuid);
     });
 
@@ -1784,8 +1882,7 @@ function showOnlyUUIDs(uuids = []) {
   });
 
   modelGroup.traverse(obj => {
-    if (!obj) return;
-    if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+    if (!isVisibilityManagedObject(obj)) return;
 
     const shouldVisible = keep.has(obj.uuid);
     if (obj.visible !== shouldVisible) {
@@ -1794,7 +1891,8 @@ function showOnlyUUIDs(uuids = []) {
     }
   });
 
-  objectPicker?.markSceneTreeDirty?.();
+  applyHiddenVisibility();
+  markVisibilityStateDirty();
   return true;
 }
 
@@ -1803,7 +1901,7 @@ function filterVisibleUUIDs(uuids = null) {
     return clearIsolation();
   }
 
-  clearIsolation();
+  clearIsolation({ applyHidden: false });
 
   const keep = new Set([modelGroup.uuid]);
 
@@ -1813,7 +1911,7 @@ function filterVisibleUUIDs(uuids = null) {
       if (!target) return;
 
       target.traverse(obj => {
-        if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+        if (!isVisibilityManagedObject(obj)) return;
         keep.add(obj.uuid);
       });
 
@@ -1826,8 +1924,7 @@ function filterVisibleUUIDs(uuids = null) {
   }
 
   modelGroup.traverse(obj => {
-    if (!obj) return;
-    if (obj?.userData?.isHelper || obj?.userData?.isMeasure) return;
+    if (!isVisibilityManagedObject(obj)) return;
 
     const shouldVisible = keep.has(obj.uuid);
     if (obj.visible !== shouldVisible) {
@@ -1836,7 +1933,34 @@ function filterVisibleUUIDs(uuids = null) {
     }
   });
 
-  objectPicker?.markSceneTreeDirty?.();
+  applyHiddenVisibility();
+  markVisibilityStateDirty();
+  return true;
+}
+
+function hideUUIDs(uuids = []) {
+  if (!Array.isArray(uuids) || !uuids.length) return false;
+
+  let added = false;
+  uuids.filter(Boolean).forEach(uuid => {
+    if (!findObjectByUUID(uuid)) return;
+    if (!hiddenTargetUUIDs.has(uuid)) {
+      hiddenTargetUUIDs.add(uuid);
+      added = true;
+    }
+  });
+
+  if (!added && !hiddenTargetUUIDs.size) return false;
+
+  const changed = applyHiddenVisibility();
+  if (changed || added) markVisibilityStateDirty();
+  return true;
+}
+
+function clearHiddenUUIDs() {
+  hiddenTargetUUIDs.clear();
+  const changed = restoreHiddenVisibility();
+  if (changed) markVisibilityStateDirty();
   return true;
 }
 
@@ -2019,21 +2143,82 @@ function stopLoop() {
   }
 }
 
+function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
+  if (!modelGroup.children.length) return false;
+  const resourceSignature = getSceneModelResourceSignature(models);
+  if (resourceSignature !== loadedSceneModelResourceSignature) return false;
+
+  const modelMap = new Map(models.map(item => [item.instanceId, item]));
+  let changed = false;
+  modelGroup.children.forEach(group => {
+    const item = modelMap.get(group.userData?.sceneModelInstanceId);
+    if (!item) return;
+
+    const nextVisible = item.visible !== false;
+    if (group.visible !== nextVisible) {
+      group.visible = nextVisible;
+      changed = true;
+    }
+    if (item.modelName && group.name !== item.modelName) {
+      group.name = item.modelName;
+      group.userData.sceneModelName = item.modelName;
+      changed = true;
+    }
+
+    const position = item.transform?.position || [0, 0, 0];
+    const rotation = item.transform?.rotation || [0, 0, 0];
+    const scale = item.transform?.scale || [1, 1, 1];
+    if (!group.position.equals(new THREE.Vector3().fromArray(position))) {
+      group.position.fromArray(position);
+      changed = true;
+    }
+    if (
+      group.rotation.x !== rotation[0] ||
+      group.rotation.y !== rotation[1] ||
+      group.rotation.z !== rotation[2]
+    ) {
+      group.rotation.set(...rotation);
+      changed = true;
+    }
+    if (!group.scale.equals(new THREE.Vector3().fromArray(scale))) {
+      group.scale.fromArray(scale);
+      changed = true;
+    }
+  });
+
+  if (!changed) return false;
+
+  modelGroup.updateMatrixWorld(true);
+  lastBounds = computeBounds(modelGroup);
+  clippingTool?.setBounds?.(lastBounds?.box || null);
+  objectPicker?.markSceneTreeDirty?.();
+  measureTool?.refreshPickTargets?.();
+  objectPicker?.refreshPickTargets?.();
+  noteUserInteraction();
+  return true;
+}
+
 async function loadModel() {
   const requestId = ++loadRequestId;
   errorText.value = "";
   loadProgress.value = 0;
+  loadingModelIndex.value = 0;
+  loadingModelTotal.value = 0;
+  loadingModelName.value = "";
 
   const sceneModels = resolvedSceneModels.value;
   if (sceneModels.length === 0) {
+    loadedSceneModelResourceSignature = "";
     clearModel();
     return;
   }
 
+  const totalCount = sceneModels.length;
+  loadingModelTotal.value = totalCount;
+  loadingModelName.value = sceneModels[0]?.modelName || "";
   loading.value = true;
   try {
     clearModel();
-    const totalCount = sceneModels.length;
     let totalTriangles = 0;
     let totalVertices = 0;
     let totalMeshCount = 0;
@@ -2042,6 +2227,8 @@ async function loadModel() {
 
     for (let index = 0; index < sceneModels.length; index += 1) {
       const item = sceneModels[index];
+      loadingModelIndex.value = index;
+      loadingModelName.value = item.modelName || `模型 ${index + 1}`;
       console.log("[ThreeModelViewer] load model", {
         index,
         totalCount,
@@ -2075,6 +2262,10 @@ async function loadModel() {
         disposeObject3D(object);
         return;
       }
+      loadProgress.value = Math.max(
+        loadProgress.value,
+        Math.round(((index + 1) / totalCount) * 100)
+      );
 
       const instanceGroup = new THREE.Group();
       instanceGroup.name = item.modelName || `模型 ${index + 1}`;
@@ -2118,6 +2309,8 @@ async function loadModel() {
 
     if (isDestroying || requestId !== loadRequestId) return;
 
+    loadedSceneModelResourceSignature =
+      getSceneModelResourceSignature(sceneModels);
     measureTool?.refreshPickTargets?.();
     objectPicker?.refreshPickTargets?.();
     captureOriginalMaterials(modelGroup);
@@ -2145,6 +2338,7 @@ async function loadModel() {
       clippingTool.setBounds(lastBounds.box);
     }
 
+    loadProgress.value = 100;
     emit("loaded", {
       url: loadedModels[0]?.modelUrl || "",
       type: sceneModels.length > 1 ? "multi" : modelType,
@@ -2169,16 +2363,23 @@ async function loadModel() {
     if (requestId === loadRequestId) {
       loading.value = false;
       loadProgress.value = 0;
+      loadingModelIndex.value = 0;
+      loadingModelTotal.value = 0;
+      loadingModelName.value = "";
     }
   }
 }
 
 function clearModel() {
+  loadedSceneModelResourceSignature = "";
   // 若处于 low 档贴图解绑状态，先恢复贴图，确保 dispose 能正确释放贴图资源
   restoreTexturesFromOriginalMaterials();
 
   texturesDisposedInLowMode = false;
   qualityReloadInProgress = false;
+  objectPicker?.clearHighlight?.();
+  objectPicker?.clearSelection?.();
+  textureBudget?.dispose?.();
 
   while (modelGroup.children.length) {
     const child = modelGroup.children.pop();
@@ -2206,6 +2407,8 @@ function clearModel() {
   detachedMaterials.clear();
 
   clearIsolation();
+  hiddenTargetUUIDs.clear();
+  hiddenVisibilityOverrides.clear();
   clearBoxSelection();
   meshOpacityOverrides.forEach(v => disposeMaterialSafe(v.override));
   meshOpacityOverrides.clear();
@@ -2958,6 +3161,8 @@ defineExpose({
   showOnlyUUIDs,
   filterVisibleUUIDs,
   clearIsolation,
+  hideUUIDs,
+  clearHiddenUUIDs,
   // 截图
   captureScreenshot,
   downloadScreenshot,
@@ -3000,13 +3205,16 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => [
-    props.modelUrl,
-    props.modelName,
-    JSON.stringify(props.sceneModels || [])
-  ],
+  () => getSceneModelResourceSignature(),
   () => {
     loadModel();
+  }
+);
+
+watch(
+  () => getSceneModelRuntimeSignature(),
+  () => {
+    applySceneModelRuntimeState();
   }
 );
 
@@ -3073,6 +3281,37 @@ const modelTypeText = computed(() => {
   });
   return type ? type.toUpperCase() : "-";
 });
+
+const normalizedLoadProgress = computed(() => {
+  const percent = Number(loadProgress.value) || 0;
+  return Math.max(0, Math.min(100, Math.round(percent)));
+});
+
+const loadingProgressStyle = computed(() => ({
+  width: `${normalizedLoadProgress.value}%`
+}));
+
+const loadingTitle = computed(() => {
+  const total = loadingModelTotal.value || resolvedSceneModels.value.length;
+  if (!total) return "正在准备模型";
+  if (total > 1) {
+    const current = Math.min(total, loadingModelIndex.value + 1);
+    return `正在加载模型 ${current}/${total}`;
+  }
+  return "正在加载模型";
+});
+
+const loadingSubtitle = computed(() => {
+  const name =
+    loadingModelName.value ||
+    resolvedSceneModels.value[loadingModelIndex.value]?.modelName ||
+    "";
+  const progressText =
+    normalizedLoadProgress.value > 0
+      ? `${normalizedLoadProgress.value}%`
+      : "初始化中";
+  return name ? `${name} - ${progressText}` : progressText;
+});
 </script>
 
 <template>
@@ -3111,8 +3350,128 @@ const modelTypeText = computed(() => {
       </div>
     </div>
 
+    <div v-if="loading && hasModelInput" class="dd-model-loading">
+      <div class="dd-model-loading__panel">
+        <div class="dd-model-loading__spinner" />
+        <div class="dd-model-loading__content">
+          <div class="dd-model-loading__title">{{ loadingTitle }}</div>
+          <div class="dd-model-loading__subtitle">{{ loadingSubtitle }}</div>
+          <div
+            class="dd-model-loading__bar"
+            role="progressbar"
+            :aria-valuenow="normalizedLoadProgress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <div
+              class="dd-model-loading__bar-inner"
+              :class="{ 'is-indeterminate': normalizedLoadProgress <= 0 }"
+              :style="loadingProgressStyle"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="errorText" class="absolute left-3 right-3 bottom-3">
       <el-alert :title="errorText" type="error" :closable="false" show-icon />
     </div>
   </div>
 </template>
+
+<style scoped>
+.dd-model-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: auto;
+  background: rgb(9 14 27 / 64%);
+  backdrop-filter: blur(2px);
+}
+
+.dd-model-loading__panel {
+  display: flex;
+  align-items: center;
+  width: min(420px, 100%);
+  padding: 18px 20px;
+  color: #eef3ff;
+  background: rgb(20 29 48 / 92%);
+  border: 1px solid rgb(148 163 184 / 28%);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 32%);
+}
+
+.dd-model-loading__spinner {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin-right: 16px;
+  border: 3px solid rgb(226 232 240 / 22%);
+  border-top-color: #5b8def;
+  border-radius: 50%;
+  animation: dd-model-loading-spin 0.9s linear infinite;
+}
+
+.dd-model-loading__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.dd-model-loading__title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.dd-model-loading__subtitle {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 18px;
+  color: rgb(226 232 240 / 78%);
+  white-space: nowrap;
+}
+
+.dd-model-loading__bar {
+  position: relative;
+  height: 6px;
+  margin-top: 14px;
+  overflow: hidden;
+  background: rgb(148 163 184 / 22%);
+  border-radius: 999px;
+}
+
+.dd-model-loading__bar-inner {
+  min-width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #5b8def, #48c6ef);
+  border-radius: inherit;
+  transition: width 0.2s ease;
+}
+
+.dd-model-loading__bar-inner.is-indeterminate {
+  width: 38% !important;
+  animation: dd-model-loading-bar 1.2s ease-in-out infinite;
+}
+
+@keyframes dd-model-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dd-model-loading-bar {
+  0% {
+    transform: translateX(-105%);
+  }
+
+  100% {
+    transform: translateX(265%);
+  }
+}
+</style>

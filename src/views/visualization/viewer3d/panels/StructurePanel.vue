@@ -18,6 +18,18 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  treeFilterText: {
+    type: String,
+    default: ""
+  },
+  modelTypeFilter: {
+    type: String,
+    default: "all"
+  },
+  modelTypeOptions: {
+    type: Array,
+    default: () => [{ label: "全部类型", value: "all" }]
+  },
   filterMethod: {
     type: Function,
     default: () => true
@@ -47,6 +59,9 @@ const emit = defineEmits([
   "restore-selected-mesh-opacity",
   "isolate-selected-node",
   "show-all-objects",
+  "hide-selected-node",
+  "restore-hidden-objects",
+  "update:modelTypeFilter",
   "update:meshOpacity"
 ]);
 
@@ -77,8 +92,11 @@ defineExpose({
   setExpandedKeys(keys) {
     treeRef.value?.setExpandedKeys?.(keys);
   },
-  scrollTo(key) {
-    treeRef.value?.scrollTo?.(key);
+  scrollToNode(key, strategy = "smart") {
+    treeRef.value?.scrollToNode?.(key, strategy);
+  },
+  scrollTo(key, strategy = "smart") {
+    treeRef.value?.scrollToNode?.(key, strategy);
   },
   filter(keyword) {
     treeRef.value?.filter?.(keyword);
@@ -139,12 +157,28 @@ onBeforeUnmount(() => {
     </div>
 
     <el-input
+      :model-value="treeFilterText"
       size="small"
       clearable
-      placeholder="筛选（按名称）"
+      placeholder="搜索模型/构件名称"
       class="mb-2"
       @update:model-value="emit('update:treeFilterText', $event)"
     />
+    <el-select
+      v-if="modelTypeOptions.length > 1"
+      :model-value="modelTypeFilter"
+      size="small"
+      class="mb-2 w-full"
+      placeholder="按模型类型筛选"
+      @update:model-value="emit('update:modelTypeFilter', $event)"
+    >
+      <el-option
+        v-for="item in modelTypeOptions"
+        :key="item.value"
+        :label="item.label"
+        :value="item.value"
+      />
+    </el-select>
 
     <div ref="treePanelRef" class="dd-tree">
       <el-tree-v2
@@ -196,6 +230,12 @@ onBeforeUnmount(() => {
         <el-button size="small" @click="emit('isolate-selected-node')">
           仅显示当前
         </el-button>
+        <el-button size="small" @click="emit('hide-selected-node')">
+          隐藏当前
+        </el-button>
+        <el-button size="small" @click="emit('restore-hidden-objects')">
+          恢复隐藏
+        </el-button>
         <el-button size="small" @click="emit('show-all-objects')">
           显示全部
         </el-button>
@@ -220,8 +260,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dd-tree {
-  min-height: 220px;
   flex: 1;
+  min-height: 220px;
   overflow: auto;
 }
 </style>

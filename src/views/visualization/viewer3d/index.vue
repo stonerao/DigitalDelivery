@@ -1786,6 +1786,7 @@ watch(
               :scene-tree="sceneTree"
               :tree-v2-props="treeV2Props"
               :tree-default-expanded-keys="treeDefaultExpandedKeys"
+              :tree-filter-text="treeFilterText"
               :filter-method="structureFilterMethod"
               :selected-tree-node="selectedTreeNode"
               :mesh-opacity="meshOpacity"
@@ -2246,34 +2247,35 @@ watch(
 
 <style scoped>
 .viewer-model-select {
+  --el-select-width: 200px;
+
+  flex: 0 0 200px;
   width: 200px;
   min-width: 200px;
-  flex: 0 0 200px;
-  --el-select-width: 200px;
 }
 
 .dd-nav-ctx-menu {
   position: fixed;
   z-index: 9999;
   min-width: 120px;
+  padding: 4px 0;
   background: var(--el-bg-color-overlay);
   border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   box-shadow: var(--el-box-shadow-light);
-  padding: 4px 0;
 }
 
 .dd-nav-ctx-item {
   padding: 6px 16px;
   font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
   color: var(--el-text-color-regular);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .dd-nav-ctx-item:hover {
-  background: var(--el-fill-color-light);
   color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
 }
 
 .dd-nav-ctx-danger:hover {

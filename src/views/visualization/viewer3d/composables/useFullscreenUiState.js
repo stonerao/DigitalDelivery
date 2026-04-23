@@ -16,15 +16,6 @@ export function useFullscreenUiState({
 }) {
   const modelPickerVisible = ref(false);
   const modelPickerSelection = ref([]);
-  const modelPickerNodeId = ref("");
-
-  const navNodeDialogVisible = ref(false);
-  const navNodeDialogMode = ref("create");
-  const navNodeDialogParentId = ref("");
-  const navNodeDialogTargetId = ref("");
-  const navNodeForm = ref({
-    label: ""
-  });
 
   const documentDialogVisible = ref(false);
   const documentDialogLoading = ref(false);
@@ -121,12 +112,6 @@ export function useFullscreenUiState({
   return {
     modelPickerVisible,
     modelPickerSelection,
-    modelPickerNodeId,
-    navNodeDialogVisible,
-    navNodeDialogMode,
-    navNodeDialogParentId,
-    navNodeDialogTargetId,
-    navNodeForm,
     documentDialogVisible,
     documentDialogLoading,
     documentDialogKeyword,

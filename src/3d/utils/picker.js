@@ -556,6 +556,7 @@ export class ObjectPicker {
       sceneModelInstanceId: obj.userData?.sceneModelInstanceId || "",
       sceneModelId: obj.userData?.sceneModelId || "",
       sceneModelName: obj.userData?.sceneModelName || "",
+      sceneModelType: obj.userData?.sceneModelType || "",
       children: []
     };
 

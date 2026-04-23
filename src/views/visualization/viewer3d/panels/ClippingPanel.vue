@@ -708,14 +708,14 @@ function resetPlaneToAxis(id) {
 }
 
 .dd-clipping-shift {
-  right: 384px;
+  right: calc(var(--dd-panel-width) + var(--dd-gap) + var(--dd-gap));
 }
 
 .dd-clipping-header {
   display: flex;
+  gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
 }
 
 .dd-clipping-title {
@@ -770,9 +770,9 @@ function resetPlaneToAxis(id) {
 
 .dd-clipping-row {
   display: flex;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
 }
 
 .dd-clipping-stats {
@@ -783,9 +783,9 @@ function resetPlaneToAxis(id) {
 
 .dd-stat-card {
   padding: 8px;
+  background: var(--el-fill-color-light);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
-  background: var(--el-fill-color-light);
 }
 
 .dd-stat-label {
@@ -823,9 +823,9 @@ function resetPlaneToAxis(id) {
 
 .dd-plane-list-head {
   display: flex;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
 }
 
 .dd-plane-list {
@@ -833,8 +833,8 @@ function resetPlaneToAxis(id) {
   flex-direction: column;
   gap: 10px;
   max-height: 360px;
-  overflow-y: auto;
   padding-right: 2px;
+  overflow-y: auto;
 }
 
 .dd-plane-item {
@@ -842,26 +842,26 @@ function resetPlaneToAxis(id) {
   flex-direction: column;
   gap: 10px;
   padding: 10px;
+  cursor: pointer;
+  background: var(--el-fill-color-lighter);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 10px;
-  background: var(--el-fill-color-lighter);
-  cursor: pointer;
   transition:
     border-color 0.18s ease,
     background 0.18s ease;
 }
 
 .dd-plane-item.is-active {
-  border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary);
 }
 
 .dd-plane-item-head,
 .dd-plane-item-row {
   display: flex;
+  gap: 10px;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
 }
 
 .dd-plane-item-row.is-slider {
@@ -872,9 +872,9 @@ function resetPlaneToAxis(id) {
 .dd-slider-head,
 .dd-axis-head {
   display: flex;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
   font-size: 12px;
 }
 

@@ -49,6 +49,7 @@ defineProps({
 const emit = defineEmits([
   "add-model",
   "select-model",
+  "locate-model",
   "remove-model",
   "refresh-model-options",
   "toggle-group",
@@ -118,6 +119,9 @@ const materialThemeOptions = [
                 @click="emit('select-model', item.modelId)"
               >
                 设为主模型
+              </el-button>
+              <el-button size="small" @click="emit('locate-model', item)">
+                定位
               </el-button>
               <el-button
                 size="small"
