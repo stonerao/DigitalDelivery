@@ -570,6 +570,7 @@ const emit = defineEmits([
   "measure-complete",
   "measure-change",
   "scene-anchor-click",
+  "canvas-contextmenu",
   "clipping-change"
 ]);
 
@@ -607,6 +608,7 @@ let onPointerUp;
 let onPointerMove;
 let onWheel;
 let onCanvasClick;
+let onCanvasContextMenu;
 let suppressNextCanvasClick = false;
 let onFirstPersonKeyDown;
 let onFirstPersonKeyUp;
@@ -1308,6 +1310,8 @@ function replaceRendererIfNeeded(quality) {
   if (canvasEl && onWheel) canvasEl.removeEventListener("wheel", onWheel);
   if (canvasEl && onCanvasClick)
     canvasEl.removeEventListener("click", onCanvasClick);
+  if (canvasEl && onCanvasContextMenu)
+    canvasEl.removeEventListener("contextmenu", onCanvasContextMenu);
 
   const rect = rootRef.value.getBoundingClientRect();
   const width = Math.max(1, rect.width);
@@ -1382,6 +1386,8 @@ function replaceRendererIfNeeded(quality) {
     canvasEl.addEventListener("pointermove", onPointerMove, { passive: true });
   if (onWheel) canvasEl.addEventListener("wheel", onWheel, { passive: true });
   if (onCanvasClick) canvasEl.addEventListener("click", onCanvasClick);
+  if (onCanvasContextMenu)
+    canvasEl.addEventListener("contextmenu", onCanvasContextMenu);
 
   return true;
 }
@@ -2660,6 +2666,21 @@ function selectByUUID(uuid, options = {}) {
   return false;
 }
 
+function pickObjectAtClientPoint(payload = {}, options = {}) {
+  if (!objectPicker) return null;
+  const clientX = Number(payload?.clientX);
+  const clientY = Number(payload?.clientY);
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+
+  const result = objectPicker.pickAtClientPoint(clientX, clientY, options);
+  if (!result?.properties) return null;
+
+  return {
+    ...result.properties,
+    hitPoint: result.point?.toArray?.() || null
+  };
+}
+
 function clearSelection() {
   objectPicker?.clearSelection();
 }
@@ -2923,6 +2944,22 @@ function mountRenderer() {
     }
   };
 
+  onCanvasContextMenu = event => {
+    noteUserInteraction();
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isFirstPerson.value) return;
+
+    const objectInfo = pickObjectAtClientPoint(event, { select: false });
+    emit("canvas-contextmenu", {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      objectInfo,
+      hitPoint: objectInfo?.hitPoint || null
+    });
+  };
+
   onFirstPersonKeyDown = e => {
     if (!isFirstPerson.value) return;
     if (e.code in firstPersonKeys) {
@@ -2968,6 +3005,7 @@ function mountRenderer() {
   canvasEl.addEventListener("pointermove", onPointerMove, { passive: true });
   canvasEl.addEventListener("wheel", onWheel, { passive: true });
   canvasEl.addEventListener("click", onCanvasClick);
+  canvasEl.addEventListener("contextmenu", onCanvasContextMenu);
   document.addEventListener("keydown", onFirstPersonKeyDown);
   document.addEventListener("keyup", onFirstPersonKeyUp);
   document.addEventListener("mousemove", onFirstPersonMouseMove);
@@ -3062,6 +3100,8 @@ function destroy() {
   if (canvasEl && onWheel) canvasEl.removeEventListener("wheel", onWheel);
   if (canvasEl && onCanvasClick)
     canvasEl.removeEventListener("click", onCanvasClick);
+  if (canvasEl && onCanvasContextMenu)
+    canvasEl.removeEventListener("contextmenu", onCanvasContextMenu);
   document.removeEventListener("keydown", onFirstPersonKeyDown);
   document.removeEventListener("keyup", onFirstPersonKeyUp);
   document.removeEventListener("mousemove", onFirstPersonMouseMove);
@@ -3073,6 +3113,7 @@ function destroy() {
   onPointerMove = null;
   onWheel = null;
   onCanvasClick = null;
+  onCanvasContextMenu = null;
   onFirstPersonKeyDown = null;
   onFirstPersonKeyUp = null;
   onFirstPersonMouseMove = null;
@@ -3148,6 +3189,7 @@ defineExpose({
   // 拾取
   getSelectedObject,
   selectByUUID,
+  pickObjectAtClientPoint,
   clearSelection,
   getSceneTree,
   getObjectWorldPositionByUUID,

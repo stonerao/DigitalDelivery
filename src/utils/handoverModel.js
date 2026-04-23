@@ -6,6 +6,10 @@ function normalizeUrlPath(url = "") {
   return String(url || "").trim();
 }
 
+function isBlobLike(value) {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+
 const DEV_REMOTE_ORIGIN = String(
   import.meta.env.VITE_DOCUMENT_DEV_REMOTE_ORIGIN || ""
 ).trim();
@@ -45,6 +49,55 @@ export function normalizeHandoverModelRecord(model) {
   if (!model || typeof model !== "object") return model;
   return {
     ...model,
-    url: resolveHandoverModelUrl(model.url)
+    url: resolveHandoverModelUrl(model.url),
+    thumbnailUrl: resolveHandoverModelUrl(
+      model.thumbnailUrl || model.thumbnail || ""
+    )
+  };
+}
+
+export async function unwrapHandoverModelThumbnailResponse(
+  response,
+  fallbackMessage = "获取模型预览图失败"
+) {
+  const blob = isBlobLike(response)
+    ? response
+    : isBlobLike(response?.data)
+      ? response.data
+      : null;
+
+  if (!blob) {
+    throw new Error(fallbackMessage);
+  }
+
+  const mime = String(blob.type || "").toLowerCase();
+  if (mime.includes("application/json") || mime.startsWith("text/")) {
+    try {
+      const text = await blob.text();
+      const parsed = JSON.parse(text);
+      throw new Error(parsed?.message || fallbackMessage);
+    } catch (error) {
+      if (error instanceof Error) throw error;
+      throw new Error(fallbackMessage);
+    }
+  }
+
+  return blob;
+}
+
+export function createHandoverModelObjectUrl(blob) {
+  if (!isBlobLike(blob) || typeof URL?.createObjectURL !== "function") {
+    return {
+      url: "",
+      revoke: () => {}
+    };
+  }
+
+  const url = URL.createObjectURL(blob);
+  return {
+    url,
+    revoke: () => {
+      URL.revokeObjectURL(url);
+    }
   };
 }

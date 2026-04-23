@@ -1,6 +1,6 @@
 import { h, defineComponent } from "vue";
 
-/** 封装@vueuse/motion动画库中的自定义指令v-motion */
+/** 登录页轻量入场动画包裹组件 */
 export default defineComponent({
   name: "Motion",
   props: {
@@ -10,10 +10,14 @@ export default defineComponent({
     }
   },
   render() {
-    // 传统中文风格：不使用入场动效，仅作为布局包裹组件
     return h(
       "div",
-      {},
+      {
+        class: "login-motion",
+        style: {
+          animationDelay: `${this.delay}ms`
+        }
+      },
       {
         default: () => [this.$slots.default?.()]
       }

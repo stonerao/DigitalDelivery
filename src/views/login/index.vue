@@ -10,7 +10,7 @@ import { useEventListener } from "@vueuse/core";
 import { useLayout } from "@/layout/hooks/useLayout";
 import { useUserStoreHook } from "@/store/modules/user";
 import { initRouter, getTopMenu } from "@/router/utils";
-import { bg, avatar, illustration } from "./utils/static";
+import { illustration } from "./utils/static";
 import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { useDataThemeChange } from "@/layout/hooks/useDataThemeChange";
 
@@ -33,7 +33,7 @@ initStorage();
 
 const { dataTheme, themeMode, dataThemeChange } = useDataThemeChange();
 dataThemeChange(themeMode.value);
-const { title } = useNav();
+const { title, getLogo } = useNav();
 
 const ruleForm = reactive({
   username: "admin",
@@ -87,9 +87,13 @@ useEventListener(document, "keydown", ({ code }) => {
 </script>
 
 <template>
-  <div class="select-none">
-    <img :src="bg" class="wave" />
-    <div class="flex-c absolute right-5 top-3">
+  <div class="login-page select-none">
+    <div class="login-backdrop" aria-hidden="true">
+      <span class="login-orb login-orb-primary" />
+      <span class="login-orb login-orb-secondary" />
+      <span class="login-grid" />
+    </div>
+    <div class="login-theme flex-c">
       <!-- 主题 -->
       <el-switch
         v-model="dataTheme"
@@ -100,14 +104,60 @@ useEventListener(document, "keydown", ({ code }) => {
       />
     </div>
     <div class="login-container">
-      <div class="img">
-        <component :is="toRaw(illustration)" />
-      </div>
+      <section class="login-hero">
+        <Motion>
+          <div class="brand-lockup">
+            <img :src="getLogo()" class="brand-logo" alt="数字化移交平台logo" />
+            <div class="brand-copy">
+              <span class="brand-eyebrow">Digital Handover</span>
+              <h1>{{ title }}</h1>
+            </div>
+          </div>
+        </Motion>
+
+        <Motion :delay="120">
+          <p class="hero-kicker">工程资料 · 三维模型 · 移交成果</p>
+        </Motion>
+
+        <Motion :delay="180">
+          <h2 class="hero-title">让移交数据从现场到运营保持一致</h2>
+        </Motion>
+
+        <Motion :delay="240">
+          <p class="hero-desc">
+            统一管理图纸、模型、文档与设备对象，建立可追溯、可复用、可交付的数据底座。
+          </p>
+        </Motion>
+
+        <Motion :delay="300">
+          <div class="hero-support">
+            <span>模型关联</span>
+            <span>资料归档</span>
+            <span>过程追溯</span>
+          </div>
+        </Motion>
+
+        <div class="visual-stage" aria-hidden="true">
+          <component :is="toRaw(illustration)" class="login-illustration" />
+          <span class="visual-ring" />
+          <span class="visual-line visual-line-a" />
+          <span class="visual-line visual-line-b" />
+        </div>
+      </section>
+
       <div class="login-box">
         <div class="login-form">
-          <avatar class="avatar" />
           <Motion>
-            <h2 class="outline-hidden">{{ title }}</h2>
+            <div class="form-header">
+              <img
+                :src="getLogo()"
+                class="form-logo"
+                alt="数字化移交平台logo"
+              />
+              <span class="form-eyebrow">Account Access</span>
+              <h2 class="outline-hidden">欢迎登录</h2>
+              <p>使用平台账号进入数字化移交工作台</p>
+            </div>
           </Motion>
 
           <el-form
@@ -150,7 +200,7 @@ useEventListener(document, "keydown", ({ code }) => {
 
             <Motion :delay="250">
               <el-button
-                class="w-full mt-4!"
+                class="login-submit w-full mt-4!"
                 size="default"
                 type="primary"
                 :loading="loading"
@@ -164,11 +214,7 @@ useEventListener(document, "keydown", ({ code }) => {
         </div>
       </div>
     </div>
-    <div
-      class="w-full flex-c absolute bottom-3 text-sm text-[rgba(0,0,0,0.6)] dark:text-[rgba(220,220,242,0.8)]"
-    >
-     
-    </div>
+    <div class="login-footer">数字化移交平台 · 安全访问</div>
   </div>
 </template>
 
@@ -179,5 +225,37 @@ useEventListener(document, "keydown", ({ code }) => {
 <style lang="scss" scoped>
 :deep(.el-input-group__append, .el-input-group__prepend) {
   padding: 0;
+}
+
+:deep(.login-form .el-form-item) {
+  margin-bottom: 20px;
+}
+
+:deep(.login-form .el-input__wrapper) {
+  min-height: 46px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 34, 56, 0.08);
+  border-radius: 14px;
+  box-shadow: none;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+:deep(.login-form .el-input__wrapper:hover),
+:deep(.login-form .el-input__wrapper.is-focus) {
+  background: #ffffff;
+  border-color: rgba(24, 213, 194, 0.5);
+  box-shadow: 0 0 0 4px rgba(24, 213, 194, 0.12);
+}
+
+:deep(.login-form .el-input__inner) {
+  color: #0f2238;
+  font-weight: 500;
+}
+
+:deep(.login-form .el-input__prefix) {
+  color: #18d5c2;
 }
 </style>

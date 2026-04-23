@@ -183,6 +183,7 @@ const emit = defineEmits([
   "measure-change",
   "measure-complete",
   "scene-anchor-click",
+  "canvas-contextmenu",
   "clipping-change",
   "update:activeTool",
   "update:measurementMode",
@@ -242,6 +243,7 @@ watch(
       @measure-change="emit('measure-change', $event)"
       @measure-complete="emit('measure-complete', $event)"
       @scene-anchor-click="emit('scene-anchor-click', $event)"
+      @canvas-contextmenu="emit('canvas-contextmenu', $event)"
       @clipping-change="emit('clipping-change', $event)"
     />
 

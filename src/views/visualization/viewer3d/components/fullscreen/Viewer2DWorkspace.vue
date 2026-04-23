@@ -283,6 +283,10 @@ function handleLayerTreeRefChange(instance) {
 function handleStructureTreeRefChange(instance) {
   emit("structure-tree-ref-change", instance || null);
 }
+
+function handleNavigationNodeContextmenu(...args) {
+  emit("navigation-node-contextmenu", ...args);
+}
 </script>
 
 <template>
@@ -344,9 +348,7 @@ function handleStructureTreeRefChange(instance) {
             :display-mode="displayMode"
             :display-mode-text="displayModeText"
             @navigation-node-click="emit('navigation-node-click', $event)"
-            @navigation-node-contextmenu="
-              emit('navigation-node-contextmenu', $event)
-            "
+            @navigation-node-contextmenu="handleNavigationNodeContextmenu"
             @update:selected-system-node-id="
               emit('update:selectedSystemNodeId', $event)
             "

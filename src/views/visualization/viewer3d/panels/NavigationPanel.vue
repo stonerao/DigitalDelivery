@@ -101,7 +101,24 @@ defineExpose({
           :expand-on-click-node="false"
           @node-click="emit('navigation-node-click', $event)"
           @node-contextmenu="handleNodeContextmenu"
-        />
+        >
+          <template #default="{ data }">
+            <div class="dd-nav-node">
+              <span class="dd-nav-node__label">{{ data.label }}</span>
+              <el-tag v-if="data.kks" size="small" effect="plain">
+                {{ data.kks }}
+              </el-tag>
+              <el-tag
+                v-if="data.documentCount"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                文件 {{ data.documentCount }}
+              </el-tag>
+            </div>
+          </template>
+        </el-tree>
         <el-empty v-else description="未加载模型数据" :image-size="56" />
       </div>
 
@@ -224,3 +241,18 @@ defineExpose({
     </div>
   </el-scrollbar>
 </template>
+
+<style scoped>
+.dd-nav-node {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.dd-nav-node__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

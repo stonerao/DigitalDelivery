@@ -20,6 +20,23 @@ export const getHandoverModelDetail = params => {
   return http.request("get", "/api/handover/models/detail", { params });
 };
 
+export const getHandoverModelThumbnail = (id, axiosConfig = {}) => {
+  return http.request(
+    "get",
+    `/api/handover/models/thumbnail/${encodeURIComponent(id)}`,
+    {},
+    {
+      ...axiosConfig,
+      responseType: "blob",
+      headers: {
+        Accept:
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        ...(axiosConfig.headers || {})
+      }
+    }
+  );
+};
+
 export const updateHandoverModel = data => {
   return http.request("post", "/api/handover/models/update", { data });
 };

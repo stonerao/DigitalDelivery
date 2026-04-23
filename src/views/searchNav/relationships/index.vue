@@ -27,6 +27,7 @@ import {
   triggerHandoverDocumentDownload,
   unwrapHandoverDocumentFileResponse
 } from "@/utils/handoverDocument";
+import { parseModelNodeRelationName } from "@/views/visualization/viewer3d/services/modelNodeRelationService";
 
 defineOptions({
   name: "Relationships"
@@ -48,8 +49,26 @@ const relTypes = [
   { label: "节点-文档", value: "node_doc" },
   { label: "节点-模型", value: "node_model" },
   { label: "KKS-文档", value: "kks_doc" },
-  { label: "KKS-模型", value: "kks_model" }
+  { label: "KKS-模型", value: "kks_model" },
+  { label: "模型-节点-文档", value: "model_object_doc" }
 ];
+
+const editableRelationTypeValues = new Set([
+  "node_doc",
+  "node_model",
+  "kks_doc",
+  "kks_model"
+]);
+
+const editableRelTypes = computed(() =>
+  relTypes.filter(
+    item => item.value && editableRelationTypeValues.has(item.value)
+  )
+);
+
+function relTypeLabel(value) {
+  return relTypes.find(item => item.value === value)?.label || value || "-";
+}
 
 const kindOptions = [
   { label: "系统节点", value: "node" },
@@ -229,6 +248,41 @@ function resolveRelationName(kind, id) {
   return `${kind}:${id}`;
 }
 
+function resolveModelNodeRelation(row) {
+  if (row?.type !== "model_object_doc") {
+    return {
+      modelId: "",
+      modelText: "",
+      nodeText: ""
+    };
+  }
+  const parsed = parseModelNodeRelationName(row?.nodeName);
+  const modelId = parsed.modelId || row?.sourceId || "";
+  const modelText = modelId ? resolveRelationName("model", modelId) : "";
+  return {
+    modelId,
+    modelText,
+    nodeText: parsed.nodeName || ""
+  };
+}
+
+function enrichRelationRow(row = {}) {
+  const modelNode = resolveModelNodeRelation(row);
+  const sourceText =
+    row?.type === "model_object_doc"
+      ? [modelNode.modelText, modelNode.nodeText].filter(Boolean).join(" / ") ||
+        resolveRelationName(row.sourceKind, row.sourceId)
+      : resolveRelationName(row.sourceKind, row.sourceId);
+  return {
+    ...row,
+    typeText: relTypeLabel(row.type),
+    sourceText,
+    targetText: resolveRelationName(row.targetKind, row.targetId),
+    modelNodeText: modelNode.nodeText,
+    modelNodeModelId: modelNode.modelId
+  };
+}
+
 async function fetchRelationRecords() {
   listLoading.value = true;
   try {
@@ -259,18 +313,14 @@ async function fetchRelationRecords() {
 }
 
 const displayRows = computed(() => {
-  return relationRows.value.map(row => ({
-    ...row,
-    sourceText: resolveRelationName(row.sourceKind, row.sourceId),
-    targetText: resolveRelationName(row.targetKind, row.targetId)
-  }));
+  return relationRows.value.map(row => enrichRelationRow(row));
 });
 
 const filteredRows = computed(() => {
   const keyword = form.keyword.trim().toLowerCase();
   if (!keyword) return displayRows.value;
   return displayRows.value.filter(row => {
-    return `${row.sourceText} ${row.targetText} ${row.id} ${row.type}`
+    return `${row.sourceText} ${row.targetText} ${row.id} ${row.type} ${row.typeText} ${row.nodeName || ""} ${row.modelNodeText || ""}`
       .toLowerCase()
       .includes(keyword);
   });
@@ -315,17 +365,13 @@ async function openDetail(row) {
     const response = await getRelationRecordDetail(row.id);
     console.log("[search-nav/relationships] relationRecords.detail:", response);
     const detail = response?.data || row;
-    detailRow.value = {
-      ...detail,
-      sourceText: resolveRelationName(detail.sourceKind, detail.sourceId),
-      targetText: resolveRelationName(detail.targetKind, detail.targetId)
-    };
+    detailRow.value = enrichRelationRow(detail);
   } catch (error) {
     console.error(
       "[search-nav/relationships] relationRecords.detail failed:",
       error
     );
-    detailRow.value = row;
+    detailRow.value = enrichRelationRow(row);
   } finally {
     detailLoading.value = false;
   }
@@ -380,7 +426,15 @@ function openCreate() {
   editOpen.value = true;
 }
 
+function canEditRelation(row) {
+  return row?.type !== "model_object_doc";
+}
+
 function openEdit(row) {
+  if (!canEditRelation(row)) {
+    message("模型-节点-文档关系请在三维页面维护", { type: "warning" });
+    return;
+  }
   editMode.value = "edit";
   editForm.id = row.id;
   editForm.type = row.type;
@@ -425,6 +479,7 @@ async function deleteRow(row) {
 const sourceOptions = computed(() => {
   if (editForm.sourceKind === "node") return nodeOptions.value;
   if (editForm.sourceKind === "kks") return kksOptions.value;
+  if (editForm.sourceKind === "model") return modelOptions.value;
   return [];
 });
 
@@ -610,13 +665,6 @@ function jumpTo(type, query = {}) {
   message("该跳转尚未实现", { type: "info" });
 }
 
-const relTypeLabel = computed(() => {
-  const map = Object.fromEntries(
-    relTypes.map(item => [item.value, item.label])
-  );
-  return value => map[value] || value || "-";
-});
-
 function smartJumpFromRelation(row) {
   if (row?.targetKind === "node") {
     return router.push({
@@ -678,7 +726,7 @@ onMounted(async () => {
           >
             <el-option
               v-for="item in kindOptions.filter(item =>
-                ['node', 'kks'].includes(item.value)
+                ['node', 'kks', 'model'].includes(item.value)
               )"
               :key="item.value"
               :label="item.label"
@@ -758,7 +806,7 @@ onMounted(async () => {
         <el-form-item label="关键字">
           <el-input
             v-model="form.keyword"
-            placeholder="页内筛选：来源/目标/ID"
+            placeholder="页内筛选：类型/来源/目标/节点/ID"
             style="width: 260px"
             clearable
           />
@@ -798,10 +846,8 @@ onMounted(async () => {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="48" />
-        <el-table-column label="类型" width="120">
-          <template #default="scope">{{
-            relTypeLabel(scope.row.type)
-          }}</template>
+        <el-table-column label="类型" width="150">
+          <template #default="scope">{{ scope.row.typeText }}</template>
         </el-table-column>
         <el-table-column
           prop="sourceText"
@@ -822,7 +868,11 @@ onMounted(async () => {
               <el-button link type="primary" @click="openDetail(scope.row)"
                 >详情</el-button
               >
-              <el-button link type="primary" @click="openEdit(scope.row)"
+              <el-button
+                v-if="canEditRelation(scope.row)"
+                link
+                type="primary"
+                @click="openEdit(scope.row)"
                 >编辑</el-button
               >
               <el-button link type="danger" @click="deleteRow(scope.row)"
@@ -855,6 +905,10 @@ onMounted(async () => {
         <div class="mb-2">
           <span class="font-semibold">类型：</span
           >{{ relTypeLabel(detailRow.type) }}
+        </div>
+        <div v-if="detailRow.type === 'model_object_doc'" class="mb-2">
+          <span class="font-semibold">模型节点：</span
+          >{{ detailRow.modelNodeText || detailRow.nodeName || "-" }}
         </div>
         <div class="mb-2">
           <span class="font-semibold">来源：</span>{{ detailRow.sourceText }}
@@ -926,7 +980,7 @@ onMounted(async () => {
             @change="syncKindsByType"
           >
             <el-option
-              v-for="item in relTypes.filter(item => item.value)"
+              v-for="item in editableRelTypes"
               :key="item.value"
               :label="item.label"
               :value="item.value"

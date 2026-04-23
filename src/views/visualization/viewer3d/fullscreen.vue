@@ -9,13 +9,21 @@ import {
 } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
+import { Camera, Pointer, Position } from "@element-plus/icons-vue";
 import { message } from "@/utils/message";
 import { getConfig } from "@/config";
 import { getHandoverKksList } from "@/api/handoverData";
 import {
+  downloadHandoverDocumentFile,
   getHandoverDocumentDetail,
-  getHandoverDocumentList
+  getHandoverDocumentList,
+  getHandoverDocFolderTree
 } from "@/api/handoverDocuments";
+import {
+  normalizeHandoverDocumentRecord,
+  triggerHandoverDocumentDownload,
+  unwrapHandoverDocumentFileResponse
+} from "@/utils/handoverDocument";
 import {
   getHandoverModelDetail,
   getHandoverModelList
@@ -60,8 +68,16 @@ import {
   normalizeBindingText
 } from "./services/sceneBindingService";
 import {
+  buildModelNodeRelationName,
+  getModelNodeRelationKey,
+  getRelationRecordModelNodeKey,
+  parseModelNodeRelationName
+} from "./services/modelNodeRelationService";
+import {
+  createDefaultDocumentBindingFolderTree,
   createDefaultDocumentBindingPagination,
   fetchBoundDocumentsByRelation,
+  loadDocumentBindingFolders,
   loadDocumentBindingOptions,
   mergeSelectedDocumentBindings,
   normalizeDocumentBindingOption,
@@ -161,6 +177,7 @@ import {
 import { useViewerToolbarState } from "./services/useViewerToolbarState";
 import Viewer3DWorkspace from "./components/fullscreen/Viewer3DWorkspace.vue";
 import Viewer2DWorkspace from "./components/fullscreen/Viewer2DWorkspace.vue";
+import FilePreview from "@/views/handover/documents/components/FilePreview.vue";
 import SceneSettingsDialog from "./components/fullscreen/dialogs/SceneSettingsDialog.vue";
 import ModelPickerDialog from "./components/fullscreen/dialogs/ModelPickerDialog.vue";
 import DocumentBindingDialog from "./components/fullscreen/dialogs/DocumentBindingDialog.vue";
@@ -355,11 +372,22 @@ const documentDialogLoading = ref(false);
 const documentDialogKeyword = ref("");
 const documentDialogRecords = ref([]);
 const documentDialogPagination = ref(createDefaultDocumentBindingPagination());
+const documentDialogFolderTreeData = ref(
+  createDefaultDocumentBindingFolderTree()
+);
+const documentDialogFolderId = ref("root");
+const documentDialogFolderLoading = ref(false);
 const documentDialogTargetId = ref("");
 const documentDialogTargetLabel = ref("");
 const documentDialogSelectedDocuments = ref([]);
 const documentDialogTableRef = ref(null);
 const documentDialogSourceId = ref("");
+const documentDialogRelationNodeName = ref("");
+const boundDocumentPreviewVisible = ref(false);
+const boundDocumentPreviewRow = ref(null);
+const boundDocumentDetailVisible = ref(false);
+const boundDocumentDetailLoading = ref(false);
+const boundDocumentDetailRow = ref(null);
 
 const activeModelDetail = ref(null);
 
@@ -431,7 +459,7 @@ function buildObjectBindingNameKey(instanceId = "", name = "") {
   return `${String(instanceId || "").trim()}::${normalizeBindingText(name)}`;
 }
 
-const MODEL_OBJECT_SOURCE_KIND = "model_object";
+const MODEL_OBJECT_SOURCE_KIND = "model";
 const MODEL_OBJECT_DOC_RELATION_TYPE = "model_object_doc";
 const MODEL_OBJECT_KKS_RELATION_TYPE = "model_object_kks";
 
@@ -446,12 +474,54 @@ function buildModelObjectSourceId({
   return `${normalizedInstanceId}:${normalizedObjectUuid}`;
 }
 
+function getSceneModelIdByInstanceId(instanceId = "") {
+  const key = String(instanceId || "").trim();
+  if (!key) return "";
+  return sceneModels.value.find(item => item.instanceId === key)?.modelId || "";
+}
+
+function getSceneDeviceModelId(item) {
+  return String(
+    item?.modelId ||
+      item?.sceneModelId ||
+      getSceneModelIdByInstanceId(item?.instanceId) ||
+      ""
+  ).trim();
+}
+
+function getSceneDeviceNodeName(item) {
+  return String(item?.nodeName || item?.name || item?.objectName || "").trim();
+}
+
+function getSceneDeviceRelationNodeName(item) {
+  return buildModelNodeRelationName({
+    modelId: getSceneDeviceModelId(item),
+    nodeName: getSceneDeviceNodeName(item)
+  });
+}
+
+function getSceneDeviceRelationKey(item) {
+  return getModelNodeRelationKey({
+    modelId: getSceneDeviceModelId(item),
+    nodeName: getSceneDeviceNodeName(item)
+  });
+}
+
 function normalizeSavedObjectBinding(item) {
   const objectUuid = String(item?.objectUuid || item?.uuid || "").trim();
   const objectName = String(item?.objectName || item?.name || "").trim();
   const path = String(item?.path || "").trim();
   if (!objectUuid && !objectName && !path) return null;
   const businessBinding = item?.businessBinding || {};
+  const parsedRelationNode = parseModelNodeRelationName(
+    item?.relationNodeName || item?.nodeName
+  );
+  const modelId = String(
+    item?.modelId || parsedRelationNode.modelId || item?.sourceId || ""
+  ).trim();
+  const nodeName = String(
+    parsedRelationNode.nodeName || item?.nodeName || objectName || ""
+  ).trim();
   const documentBindings = Array.isArray(item?.documentBindings)
     ? item.documentBindings
     : Array.isArray(item?.documents)
@@ -459,12 +529,12 @@ function normalizeSavedObjectBinding(item) {
       : [];
   return {
     instanceId: String(item?.instanceId || "").trim(),
-    sourceId:
-      String(item?.sourceId || "").trim() ||
-      buildModelObjectSourceId({
-        instanceId: item?.instanceId,
-        objectUuid
-      }),
+    modelId,
+    sourceId: modelId,
+    nodeName,
+    relationNodeName:
+      String(item?.relationNodeName || "").trim() ||
+      buildModelNodeRelationName({ modelId, nodeName }),
     objectUuid,
     objectName,
     path,
@@ -539,24 +609,54 @@ function normalizeNodeBoundDocuments(items) {
   return Array.from(uniqueMap.values());
 }
 
-function getSceneDeviceSourceId(item) {
-  return buildModelObjectSourceId({
-    instanceId: item?.instanceId,
-    objectUuid: item?.objectUuid || item?.uuid
+function normalizeBoundDocumentRecord(item) {
+  const base = normalizeNodeBoundDocument(item);
+  if (!base) return null;
+  return normalizeHandoverDocumentRecord({
+    ...item,
+    ...base
   });
 }
 
-function getSceneDeviceBySourceId(sourceId) {
+function formatDocumentSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const fixed = unitIndex === 0 ? 0 : size < 10 ? 2 : 1;
+  return `${size.toFixed(fixed)} ${units[unitIndex]}`;
+}
+
+function getSceneDeviceSourceId(item) {
+  return getSceneDeviceModelId(item);
+}
+
+function getSceneDeviceByModelNode(sourceId, relationNodeName = "") {
   const key = String(sourceId || "").trim();
   if (!key) return null;
+  const parsed = parseModelNodeRelationName(relationNodeName);
+  const relationKey = getModelNodeRelationKey({
+    modelId: parsed.modelId || key,
+    nodeName: parsed.nodeName
+  });
+  if (!relationKey) return null;
   return (
-    sceneDevices.value.find(item => getSceneDeviceSourceId(item) === key) ||
-    null
+    sceneDevices.value.find(
+      item => getSceneDeviceRelationKey(item) === relationKey
+    ) || null
   );
 }
 
 function applySceneDeviceBindingPatch(sourceId, patch = {}) {
-  const target = getSceneDeviceBySourceId(sourceId);
+  const target = getSceneDeviceByModelNode(
+    sourceId,
+    patch.relationNodeName || patch.nodeName || ""
+  );
   if (!target) return false;
   Object.assign(target, patch);
   if (!Array.isArray(target.boundDocuments)) {
@@ -678,10 +778,19 @@ async function fetchDocumentOptionsByIds(ids = []) {
 }
 
 async function syncSceneObjectRelationsFromBackend() {
-  const sourceIds = sceneDevices.value
-    .map(item => getSceneDeviceSourceId(item))
-    .filter(Boolean);
-  if (!sourceIds.length) return;
+  const sourceIds = Array.from(
+    new Set(
+      sceneDevices.value
+        .map(item => getSceneDeviceSourceId(item))
+        .filter(Boolean)
+    )
+  );
+  const deviceRelationKeySet = new Set(
+    sceneDevices.value
+      .map(item => getSceneDeviceRelationKey(item))
+      .filter(Boolean)
+  );
+  if (!sourceIds.length || !deviceRelationKeySet.size) return;
 
   try {
     const [kksRecords, documentRecords] = await Promise.all([
@@ -696,9 +805,12 @@ async function syncSceneObjectRelationsFromBackend() {
     ]);
     const records = [...kksRecords, ...documentRecords];
     const sourceIdSet = new Set(sourceIds);
-    const matched = records.filter(item =>
-      sourceIdSet.has(String(item?.sourceId || "").trim())
-    );
+    const matched = records.filter(item => {
+      const sourceId = String(item?.sourceId || "").trim();
+      if (!sourceIdSet.has(sourceId)) return false;
+      const relationKey = getRelationRecordModelNodeKey(item);
+      return relationKey && deviceRelationKeySet.has(relationKey);
+    });
 
     const documentIds = Array.from(
       new Set(
@@ -713,9 +825,11 @@ async function syncSceneObjectRelationsFromBackend() {
 
     const relationMap = new Map();
     matched.forEach(item => {
-      const sourceId = String(item?.sourceId || "").trim();
-      if (!sourceId) return;
-      const current = relationMap.get(sourceId) || {
+      const relationKey = getRelationRecordModelNodeKey(item);
+      if (!relationKey) return;
+      const current = relationMap.get(relationKey) || {
+        sourceId: String(item?.sourceId || "").trim(),
+        relationNodeName: String(item?.nodeName || ""),
         kks: "",
         nodeId: "",
         kksRelationId: "",
@@ -745,23 +859,23 @@ async function syncSceneObjectRelationsFromBackend() {
         }
       }
 
-      relationMap.set(sourceId, current);
+      relationMap.set(relationKey, current);
     });
 
     sceneDevices.value.forEach(item => {
       const sourceId = getSceneDeviceSourceId(item);
-      const backendBinding = relationMap.get(sourceId);
+      const relationNodeName = getSceneDeviceRelationNodeName(item);
+      const backendBinding = relationMap.get(getSceneDeviceRelationKey(item));
+      item.modelId = sourceId;
+      item.nodeName = getSceneDeviceNodeName(item);
       item.sourceId = sourceId;
-      item.kks = backendBinding?.kks || item.kks || "";
-      item.nodeId =
-        backendBinding?.nodeId ||
-        item.nodeId ||
-        buildNodeIdByKks(item.kks || "") ||
-        "";
+      item.relationNodeName = relationNodeName;
+      item.kks = backendBinding?.kks || "";
+      item.nodeId = backendBinding?.nodeId || buildNodeIdByKks(item.kks) || "";
       item.kksRelationId = backendBinding?.kksRelationId || "";
       item.documentRelationIds = backendBinding?.documentRelationIds || [];
       item.boundDocuments = normalizeNodeBoundDocuments(
-        backendBinding?.boundDocuments || item.boundDocuments || []
+        backendBinding?.boundDocuments || []
       );
     });
 
@@ -1791,11 +1905,14 @@ const navigationTreeData = computed(() => {
       .filter(device => device.instanceId === item.instanceId)
       .map(device => ({
         id: `nav-device:${device.uuid}`,
-        label: device.kks ? `${device.name}（${device.kks}）` : device.name,
+        label: device.name,
         kind: "device",
         uuid: device.uuid,
         nodeId: device.nodeId,
         kks: device.kks,
+        documentCount: Array.isArray(device.boundDocuments)
+          ? device.boundDocuments.length
+          : 0,
         raw: device
       }));
 
@@ -2528,11 +2645,22 @@ function cancelPositionPicking() {
   stopPositionPicking();
 }
 
-function openCreateAnchorDialog(kind = "anchor") {
+function openCreateAnchorDialog(kind = "anchor", options = {}) {
   stopPositionPicking({ restoreTool: false });
   anchorDialogKind.value = kind;
   anchorDialogMode.value = "create";
-  anchorForm.value = buildStyledAnchorForm(kind, {}, selectedObjectInfo.value);
+  anchorForm.value = buildStyledAnchorForm(
+    kind,
+    {},
+    options.selectedObject || selectedObjectInfo.value
+  );
+  const worldPosition = normalizeCanvasContextWorldPosition(
+    options.worldPosition
+  );
+  if (worldPosition) {
+    anchorForm.value.anchorMode = "world";
+    anchorForm.value.worldPosition = [...worldPosition];
+  }
   anchorDialogVisible.value = true;
 }
 
@@ -2683,6 +2811,7 @@ function openCameraVideo(anchor) {
 }
 
 function handleSceneAnchorClick(anchor) {
+  hideCanvasContextToolbar();
   if (!anchor) return;
   runtimeEventBus.emit(
     anchor.type === "camera-point" ? "camera.clicked" : "anchor.clicked",
@@ -2720,6 +2849,13 @@ function refreshSceneDevices() {
   }
   const persistedBindings = new Map();
   savedObjectBindings.value.forEach(item => {
+    const relationKey = getModelNodeRelationKey({
+      modelId: item.modelId || item.sourceId,
+      nodeName: item.nodeName || item.objectName
+    });
+    if (relationKey) {
+      persistedBindings.set(relationKey, item);
+    }
     const uuidKey = buildObjectBindingKey(item.instanceId, item.objectUuid);
     if (item.objectUuid) {
       persistedBindings.set(uuidKey, item);
@@ -2741,6 +2877,10 @@ function refreshSceneDevices() {
   sceneDevices.value.forEach(item => {
     const binding = {
       instanceId: item.instanceId || "",
+      modelId: getSceneDeviceModelId(item),
+      nodeName: getSceneDeviceNodeName(item),
+      sourceId: getSceneDeviceSourceId(item),
+      relationNodeName: getSceneDeviceRelationNodeName(item),
       objectUuid: item.uuid,
       meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
       objectName: item.name || "",
@@ -2748,6 +2888,13 @@ function refreshSceneDevices() {
       kks: item.kks || "",
       nodeId: item.nodeId || ""
     };
+    const relationKey = getModelNodeRelationKey({
+      modelId: binding.modelId,
+      nodeName: binding.nodeName
+    });
+    if (relationKey) {
+      persistedBindings.set(relationKey, binding);
+    }
     if (binding.objectUuid) {
       persistedBindings.set(
         buildObjectBindingKey(binding.instanceId, binding.objectUuid),
@@ -2772,6 +2919,7 @@ function refreshSceneDevices() {
     sceneModels.value.map(item => [
       item.instanceId,
       {
+        modelId: item.modelId || "",
         nodeId: item.systemNodeId || "",
         label:
           item.systemNodeLabel || getSystemNodeLabel(item.systemNodeId || "")
@@ -2784,7 +2932,14 @@ function refreshSceneDevices() {
     configuredBindings: configuredObjectBindings.value,
     getNodeLabel: nodeId => getSystemNodeLabel(nodeId)
   }).map(item => {
+    const modelNode = modelNodeMap.get(item.instanceId) || null;
     const stored =
+      persistedBindings.get(
+        getModelNodeRelationKey({
+          modelId: modelNode?.modelId || item.modelId,
+          nodeName: item.nodeName || item.name
+        })
+      ) ||
       persistedBindings.get(
         buildObjectBindingKey(item.instanceId, item.uuid)
       ) ||
@@ -2796,19 +2951,22 @@ function refreshSceneDevices() {
       ) ||
       persistedBindings.get(item.uuid) ||
       null;
-    const modelNode = modelNodeMap.get(item.instanceId) || null;
     const nodeId = stored?.nodeId || item.nodeId || modelNode?.nodeId || "";
     const systemName =
       getSystemNodeLabel(nodeId) || modelNode?.label || item.systemName || "";
     const kks = stored?.kks || item.kks || "";
+    const modelId = modelNode?.modelId || getSceneDeviceModelId(item);
+    const nodeName = getSceneDeviceNodeName(item);
+    const relationNodeName = buildModelNodeRelationName({
+      modelId,
+      nodeName
+    });
     return {
       ...item,
-      sourceId:
-        stored?.sourceId ||
-        buildModelObjectSourceId({
-          instanceId: item.instanceId,
-          objectUuid: item.uuid
-        }),
+      modelId,
+      nodeName,
+      sourceId: modelId,
+      relationNodeName,
       kks,
       nodeId,
       systemName,
@@ -3355,8 +3513,46 @@ const ctxMenuVisible = ref(false);
 const ctxMenuStyle = ref({ top: "0px", left: "0px" });
 const ctxMenuNode = ref(null);
 const ctxMenuIsDevice = computed(() => ctxMenuNode.value?.kind === "device");
+const canvasContextToolbarVisible = ref(false);
+const canvasContextToolbarPayload = ref({
+  clientX: 0,
+  clientY: 0,
+  objectInfo: null,
+  hitPoint: null
+});
+let closeCanvasContextToolbarListener = null;
+
+const canvasContextObjectInfo = computed(
+  () => canvasContextToolbarPayload.value.objectInfo || null
+);
+const canvasContextToolbarHasObject = computed(() =>
+  Boolean(getCanvasContextObjectUuid(canvasContextObjectInfo.value))
+);
+const canvasContextToolbarStyle = computed(() => {
+  const viewportWidth =
+    typeof window === "undefined" ? 1280 : window.innerWidth;
+  const viewportHeight =
+    typeof window === "undefined" ? 720 : window.innerHeight;
+  const toolbarWidth = 160;
+  const toolbarHeight = 132;
+  const margin = 8;
+  const x = Number(canvasContextToolbarPayload.value.clientX) || margin;
+  const y = Number(canvasContextToolbarPayload.value.clientY) || margin;
+
+  return {
+    left: `${Math.max(
+      margin,
+      Math.min(x, viewportWidth - toolbarWidth - margin)
+    )}px`,
+    top: `${Math.max(
+      margin,
+      Math.min(y, viewportHeight - toolbarHeight - margin)
+    )}px`
+  };
+});
 
 function handleNavTreeContextMenu(event, data) {
+  hideCanvasContextToolbar();
   openContextMenu({
     event,
     data,
@@ -3369,6 +3565,114 @@ function handleNavTreeContextMenu(event, data) {
     setVisible: value => {
       ctxMenuVisible.value = value;
     }
+  });
+}
+
+function normalizeCanvasContextWorldPosition(value) {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const position = value.slice(0, 3).map(item => Number(item));
+  return position.every(Number.isFinite) ? position : null;
+}
+
+function getCanvasContextObjectUuid(info = null) {
+  return String(info?.objectUuid || info?.uuid || "").trim();
+}
+
+function getCanvasContextSelectedObject(info = null) {
+  const uuid = getCanvasContextObjectUuid(info);
+  if (!uuid) return null;
+  return {
+    ...info,
+    uuid
+  };
+}
+
+function cleanupCanvasContextToolbarDismiss() {
+  if (!closeCanvasContextToolbarListener) return;
+  document.removeEventListener(
+    "click",
+    closeCanvasContextToolbarListener,
+    true
+  );
+  document.removeEventListener(
+    "contextmenu",
+    closeCanvasContextToolbarListener,
+    true
+  );
+  window.removeEventListener("resize", closeCanvasContextToolbarListener);
+  closeCanvasContextToolbarListener = null;
+}
+
+function hideCanvasContextToolbar() {
+  canvasContextToolbarVisible.value = false;
+  cleanupCanvasContextToolbarDismiss();
+}
+
+function registerCanvasContextToolbarDismiss() {
+  cleanupCanvasContextToolbarDismiss();
+  closeCanvasContextToolbarListener = event => {
+    if (event?.target?.closest?.(".dd-canvas-context-toolbar")) return;
+    hideCanvasContextToolbar();
+  };
+  setTimeout(() => {
+    if (!closeCanvasContextToolbarListener) return;
+    document.addEventListener("click", closeCanvasContextToolbarListener, true);
+    document.addEventListener(
+      "contextmenu",
+      closeCanvasContextToolbarListener,
+      true
+    );
+    window.addEventListener("resize", closeCanvasContextToolbarListener);
+  }, 0);
+}
+
+function handleCanvasContextMenu(payload = {}) {
+  if (positionPickingState.value.active) return;
+  ctxMenuVisible.value = false;
+  canvasContextToolbarPayload.value = {
+    clientX: Number(payload.clientX) || 0,
+    clientY: Number(payload.clientY) || 0,
+    objectInfo: payload.objectInfo || null,
+    hitPoint: normalizeCanvasContextWorldPosition(payload.hitPoint)
+  };
+  canvasContextToolbarVisible.value = true;
+  registerCanvasContextToolbarDismiss();
+}
+
+function selectCanvasContextObjectInfo(info, { notifyOnMiss = true } = {}) {
+  const uuid = getCanvasContextObjectUuid(info);
+  if (!uuid) {
+    if (notifyOnMiss) {
+      message("右键位置未命中模型构件", { type: "warning" });
+    }
+    return false;
+  }
+  const selected = viewerAdapter.selectObjectByUUID(uuid, {
+    emitEvent: true
+  });
+  if (!selected && notifyOnMiss) {
+    message("当前构件无法选中，请重新右键选择模型表面", {
+      type: "warning"
+    });
+  }
+  return Boolean(selected);
+}
+
+function selectCanvasContextObject() {
+  const info = canvasContextObjectInfo.value;
+  hideCanvasContextToolbar();
+  selectCanvasContextObjectInfo(info);
+}
+
+function openCanvasContextCreateAnchor(kind = "anchor") {
+  const payload = canvasContextToolbarPayload.value;
+  const selectedObject = getCanvasContextSelectedObject(payload.objectInfo);
+  const worldPosition = normalizeCanvasContextWorldPosition(payload.hitPoint);
+
+  hideCanvasContextToolbar();
+  openCreateAnchorDialog(kind, {
+    selectedObject,
+    worldPosition
   });
 }
 
@@ -3399,11 +3703,30 @@ function syncCurrentDocumentTableSelection() {
   });
 }
 
+async function loadCurrentDocumentFolders() {
+  documentDialogFolderLoading.value = true;
+  try {
+    documentDialogFolderTreeData.value = await loadDocumentBindingFolders({
+      getFolderTree: getHandoverDocFolderTree,
+      unwrapApiData
+    });
+  } catch (error) {
+    console.error("load document folders failed", error);
+    documentDialogFolderTreeData.value =
+      createDefaultDocumentBindingFolderTree();
+    message(error?.message || "加载文档目录失败", { type: "error" });
+  } finally {
+    documentDialogFolderLoading.value = false;
+  }
+}
+
 async function loadCurrentDocumentOptions(keyword = "") {
   documentDialogLoading.value = true;
   try {
     const { records, pagination } = await loadDocumentBindingOptions({
       keyword,
+      folderId: documentDialogFolderId.value,
+      folderTreeData: documentDialogFolderTreeData.value,
       pagination: documentDialogPagination.value,
       getDocumentList: getHandoverDocumentList,
       unwrapApiData
@@ -3421,12 +3744,88 @@ async function loadCurrentDocumentOptions(keyword = "") {
   }
 }
 
+async function loadBoundDocumentDetail(
+  row,
+  fallbackMessage = "加载文档详情失败"
+) {
+  const documentId = String(row?.id || row?.documentId || "").trim();
+  if (!documentId) {
+    throw new Error("当前文档缺少 ID，无法查看");
+  }
+  const detail = unwrapApiData(
+    await getHandoverDocumentDetail(documentId),
+    fallbackMessage
+  );
+  return (
+    normalizeBoundDocumentRecord(detail) || normalizeBoundDocumentRecord(row)
+  );
+}
+
+async function openBoundDocumentDetail(row) {
+  if (!row?.id) {
+    message("当前文档缺少 ID，无法查看详情", { type: "warning" });
+    return;
+  }
+  boundDocumentDetailVisible.value = true;
+  boundDocumentDetailLoading.value = true;
+  try {
+    boundDocumentDetailRow.value = await loadBoundDocumentDetail(row);
+  } catch (error) {
+    boundDocumentDetailRow.value = normalizeBoundDocumentRecord(row);
+    console.error("load bound document detail failed", error);
+    message(error?.message || "加载文档详情失败", { type: "error" });
+  } finally {
+    boundDocumentDetailLoading.value = false;
+  }
+}
+
+async function openBoundDocumentPreview(row) {
+  if (!row?.id) {
+    message("当前文档缺少 ID，无法预览", { type: "warning" });
+    return;
+  }
+  try {
+    boundDocumentPreviewRow.value = await loadBoundDocumentDetail(
+      row,
+      "加载预览文档失败"
+    );
+  } catch (error) {
+    console.error("load preview document detail failed", error);
+    boundDocumentPreviewRow.value = normalizeBoundDocumentRecord(row);
+  }
+  boundDocumentPreviewVisible.value = true;
+}
+
+function downloadBoundDocument(row) {
+  const documentId = String(row?.id || row?.documentId || "").trim();
+  const documentName = String(row?.name || row?.title || "document").trim();
+  if (!documentId) {
+    message("当前文档缺少 ID，无法下载", { type: "warning" });
+    return;
+  }
+  downloadHandoverDocumentFile(documentId)
+    .then(response =>
+      unwrapHandoverDocumentFileResponse(response, "下载文件失败")
+    )
+    .then(blob => {
+      if (!triggerHandoverDocumentDownload(blob, documentName)) {
+        throw new Error("浏览器不支持当前下载方式");
+      }
+      message(`已开始下载：${documentName}`, { type: "success" });
+    })
+    .catch(error => {
+      console.error("download bound document failed", error);
+      message(error?.message || `下载失败：${documentName}`, { type: "error" });
+    });
+}
+
 async function fetchDialogBoundDocuments() {
   const meta = getDocumentDialogMeta();
   if (!documentDialogSourceId.value) return [];
   return fetchBoundDocumentsByRelation({
     sourceKind: meta.sourceKind,
     sourceId: documentDialogSourceId.value,
+    nodeName: documentDialogRelationNodeName.value,
     relationType: meta.relationType,
     listRelationRecordsBySourceAndType,
     fetchDocumentOptionsByIds
@@ -3442,6 +3841,7 @@ function applyFetchedDialogDocuments(items = []) {
   }
   applySceneDeviceBindingPatch(documentDialogSourceId.value, {
     sourceId: documentDialogSourceId.value,
+    relationNodeName: documentDialogRelationNodeName.value,
     boundDocuments: documents
   });
 }
@@ -3452,6 +3852,7 @@ async function openDocumentDialog({
   targetId = "",
   targetLabel = "",
   sourceId = "",
+  relationNodeName = "",
   initialDocuments = []
 } = {}) {
   if (!targetId || !sourceId) return;
@@ -3462,8 +3863,12 @@ async function openDocumentDialog({
     targetLabel || getDocumentDialogMeta(scope).targetLabel
   ).trim();
   documentDialogSourceId.value = String(sourceId || "").trim();
+  documentDialogRelationNodeName.value =
+    scope === "object" ? String(relationNodeName || "").trim() : "";
   documentDialogKeyword.value = "";
   documentDialogPagination.value = createDefaultDocumentBindingPagination();
+  documentDialogFolderId.value = "root";
+  documentDialogFolderTreeData.value = createDefaultDocumentBindingFolderTree();
   documentDialogSelectedDocuments.value =
     normalizeNodeBoundDocuments(initialDocuments);
   documentDialogVisible.value = true;
@@ -3478,6 +3883,7 @@ async function openDocumentDialog({
 
   if (mode === "bind") {
     documentDialogRecords.value = [];
+    await loadCurrentDocumentFolders();
     void loadCurrentDocumentOptions();
   }
 }
@@ -3486,7 +3892,10 @@ function onCtxBindDocuments() {
   const targetId = String(
     ctxMenuNode.value?.nodeId || ctxMenuNode.value?.id || ""
   ).trim();
-  if (!targetId) return;
+  if (!targetId) {
+    message("请先选择一个导航节点", { type: "warning" });
+    return;
+  }
   const targetNode = findNavigationNodeById(systemNodeTree.value, targetId);
   void openDocumentDialog({
     scope: "node",
@@ -3503,7 +3912,10 @@ function onCtxViewDocuments() {
   const targetId = String(
     ctxMenuNode.value?.nodeId || ctxMenuNode.value?.id || ""
   ).trim();
-  if (!targetId) return;
+  if (!targetId) {
+    message("请先选择一个导航节点", { type: "warning" });
+    return;
+  }
   const targetNode = findNavigationNodeById(systemNodeTree.value, targetId);
   void openDocumentDialog({
     scope: "node",
@@ -3520,7 +3932,11 @@ function onCtxBindObjectDocuments() {
   const raw = ctxMenuNode.value?.raw || null;
   const targetUuid = String(raw?.uuid || "").trim();
   const sourceId = getSceneDeviceSourceId(raw);
-  if (!targetUuid || !sourceId) return;
+  const relationNodeName = getSceneDeviceRelationNodeName(raw);
+  if (!targetUuid || !sourceId || !relationNodeName) {
+    message("当前构件缺少绑定标识，无法绑定文件", { type: "warning" });
+    return;
+  }
   void openDocumentDialog({
     scope: "object",
     mode: "bind",
@@ -3528,6 +3944,7 @@ function onCtxBindObjectDocuments() {
     targetLabel:
       raw?.name || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
     sourceId,
+    relationNodeName,
     initialDocuments: raw?.boundDocuments || []
   });
 }
@@ -3536,7 +3953,11 @@ function onCtxViewObjectDocuments() {
   const raw = ctxMenuNode.value?.raw || null;
   const targetUuid = String(raw?.uuid || "").trim();
   const sourceId = getSceneDeviceSourceId(raw);
-  if (!targetUuid || !sourceId) return;
+  const relationNodeName = getSceneDeviceRelationNodeName(raw);
+  if (!targetUuid || !sourceId || !relationNodeName) {
+    message("当前构件缺少绑定标识，无法查看绑定文件", { type: "warning" });
+    return;
+  }
   void openDocumentDialog({
     scope: "object",
     mode: "view",
@@ -3544,6 +3965,7 @@ function onCtxViewObjectDocuments() {
     targetLabel:
       raw?.name || ctxMenuNode.value?.label || ctxMenuNode.value?.name,
     sourceId,
+    relationNodeName,
     initialDocuments: raw?.boundDocuments || []
   });
 }
@@ -3562,6 +3984,12 @@ function handleDocumentSelectionChange(selection = []) {
 
 async function searchDocumentOptions(keyword) {
   documentDialogKeyword.value = String(keyword || "");
+  documentDialogPagination.value.page = 1;
+  await loadCurrentDocumentOptions(documentDialogKeyword.value);
+}
+
+async function onDocumentFolderChange(folderId) {
+  documentDialogFolderId.value = String(folderId || "root").trim() || "root";
   documentDialogPagination.value.page = 1;
   await loadCurrentDocumentOptions(documentDialogKeyword.value);
 }
@@ -3745,17 +4173,20 @@ async function onCtxClearProp() {
   ctxMenuVisible.value = false;
   const raw = ctxMenuNode.value?.raw || null;
   const sourceId = getSceneDeviceSourceId(raw);
+  const relationNodeName = getSceneDeviceRelationNodeName(raw);
   try {
-    if (sourceId) {
+    if (sourceId && relationNodeName) {
       await upsertSceneObjectKksRelation({
         sourceId,
+        relationNodeName,
         kks: "",
         relationId: raw?.kksRelationId || ""
       });
     }
     const cleared = clearNodeProperty(ctxMenuNode.value, sceneDevices.value);
-    if (cleared && sourceId) {
+    if (cleared && sourceId && relationNodeName) {
       applySceneDeviceBindingPatch(sourceId, {
+        relationNodeName,
         kks: "",
         nodeId: "",
         kksRelationId: ""
@@ -3791,7 +4222,10 @@ function syncSavedObjectBindingsFromSceneDevices() {
     )
     .map(item => ({
       instanceId: item.instanceId || "",
+      modelId: getSceneDeviceModelId(item),
       sourceId: getSceneDeviceSourceId(item),
+      nodeName: getSceneDeviceNodeName(item),
+      relationNodeName: getSceneDeviceRelationNodeName(item),
       objectUuid: item.uuid,
       meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
       objectName: item.name || "",
@@ -3814,6 +4248,10 @@ function syncSavedObjectBindingsFromSceneDevices() {
           objectBindings: savedObjectBindings.value.map(item => ({
             bindingId: `binding-${item.objectUuid}`,
             instanceId: item.instanceId || "",
+            modelId: item.modelId || "",
+            sourceId: item.sourceId || item.modelId || "",
+            nodeName: item.nodeName || item.objectName || "",
+            relationNodeName: item.relationNodeName || "",
             objectUuid: item.objectUuid,
             meshUuids: Array.isArray(item.meshUuids) ? item.meshUuids : [],
             objectName: item.objectName || "",
@@ -3839,13 +4277,21 @@ function syncSavedObjectBindingsFromSceneDevices() {
 
 async function upsertSceneObjectKksRelation({
   sourceId,
+  relationNodeName,
   kks,
   relationId = ""
 }) {
-  const currentRelations = await listModelObjectRelationsBySourceAndType(
+  const relationKey = getRelationRecordModelNodeKey({
     sourceId,
-    MODEL_OBJECT_KKS_RELATION_TYPE
-  );
+    nodeName: relationNodeName
+  });
+  if (!sourceId || !relationKey) return "";
+  const currentRelations = (
+    await listModelObjectRelationsBySourceAndType(
+      sourceId,
+      MODEL_OBJECT_KKS_RELATION_TYPE
+    )
+  ).filter(item => getRelationRecordModelNodeKey(item) === relationKey);
   const normalizedKks = String(kks || "").trim();
 
   if (!normalizedKks) {
@@ -3858,8 +4304,12 @@ async function upsertSceneObjectKksRelation({
     return "";
   }
 
-  let primaryRelationId =
-    relationId || String(currentRelations[0]?.id || "").trim();
+  const normalizedRelationId = String(relationId || "").trim();
+  let primaryRelationId = currentRelations.some(
+    item => String(item?.id || "").trim() === normalizedRelationId
+  )
+    ? normalizedRelationId
+    : String(currentRelations[0]?.id || "").trim();
   const payload = {
     type: MODEL_OBJECT_KKS_RELATION_TYPE,
     sourceKind: MODEL_OBJECT_SOURCE_KIND,
@@ -3874,26 +4324,32 @@ async function upsertSceneObjectKksRelation({
       ...payload
     });
   } else {
-    await createRelationRecord(payload);
+    await createRelationRecord({
+      ...payload,
+      nodeName: relationNodeName
+    });
   }
 
   const refreshedRelations = await listModelObjectRelationsBySourceAndType(
     sourceId,
     MODEL_OBJECT_KKS_RELATION_TYPE
   );
+  const refreshedNodeRelations = refreshedRelations.filter(
+    item => getRelationRecordModelNodeKey(item) === relationKey
+  );
   const primaryRelation =
-    refreshedRelations.find(
+    refreshedNodeRelations.find(
       item => String(item?.id || "").trim() === primaryRelationId
     ) ||
-    refreshedRelations.find(
+    refreshedNodeRelations.find(
       item => String(item?.targetId || "").trim() === normalizedKks
     ) ||
-    refreshedRelations[0] ||
+    refreshedNodeRelations[0] ||
     null;
   primaryRelationId = String(primaryRelation?.id || "").trim();
 
   await Promise.all(
-    refreshedRelations
+    refreshedNodeRelations
       .filter(item => String(item?.id || "").trim() !== primaryRelationId)
       .map(item => String(item?.id || "").trim())
       .filter(Boolean)
@@ -3914,18 +4370,21 @@ async function confirmPropDialog() {
   if (!confirmed) return;
   const raw = ctxMenuNode.value?.raw || null;
   const sourceId = getSceneDeviceSourceId(raw);
-  if (!sourceId) {
+  const relationNodeName = getSceneDeviceRelationNodeName(raw);
+  if (!sourceId || !relationNodeName) {
     message("当前构件缺少绑定标识，无法提交后端", { type: "error" });
     return;
   }
   try {
     const kksRelationId = await upsertSceneObjectKksRelation({
       sourceId,
+      relationNodeName,
       kks: propEditForm.value.kks,
       relationId: raw?.kksRelationId || ""
     });
     applySceneDeviceBindingPatch(sourceId, {
       sourceId,
+      relationNodeName,
       kks: propEditForm.value.kks || "",
       nodeId:
         propEditForm.value.nodeId ||
@@ -3954,6 +4413,7 @@ async function confirmDocumentDialog() {
     const { documents, relationIds } = await replaceDocumentRelations({
       sourceKind: meta.sourceKind,
       sourceId: documentDialogSourceId.value,
+      nodeName: documentDialogRelationNodeName.value,
       relationType: meta.relationType,
       documents: documentDialogSelectedDocuments.value,
       listRelationRecordsBySourceAndType,
@@ -3965,6 +4425,7 @@ async function confirmDocumentDialog() {
     if (documentDialogScope.value === "object") {
       applySceneDeviceBindingPatch(documentDialogSourceId.value, {
         sourceId: documentDialogSourceId.value,
+        relationNodeName: documentDialogRelationNodeName.value,
         boundDocuments: documents,
         documentRelationIds: relationIds
       });
@@ -4202,6 +4663,7 @@ async function applyDisplayAction(action) {
 }
 
 async function onObjectSelect(info) {
+  hideCanvasContextToolbar();
   if (
     positionPickingState.value.active &&
     Array.isArray(info?.hitPoint) &&
@@ -4513,6 +4975,12 @@ function handleFullscreenShortcut(event) {
   if (isEditableShortcutTarget(event.target || document.activeElement)) return;
 
   const key = event.key?.toLowerCase?.() || "";
+  if (key === "escape" && canvasContextToolbarVisible.value) {
+    event.preventDefault();
+    hideCanvasContextToolbar();
+    return;
+  }
+
   if (key === "escape" && positionPickingState.value.active) {
     cancelPositionPicking();
     return;
@@ -4863,6 +5331,7 @@ onBeforeUnmount(() => {
   stopClippingAnimation({ persist: false });
   stopRuntimeServices();
   runtimeEventBus.clear();
+  cleanupCanvasContextToolbarDismiss();
   viewerAdapter.unbindViewer();
   videoAdapter.destroy();
   if (onFullscreenKeydown) {
@@ -4945,6 +5414,7 @@ onBeforeUnmount(() => {
           @measure-change="handleMeasurementChange"
           @measure-complete="handleMeasurementChange"
           @scene-anchor-click="handleSceneAnchorClick"
+          @canvas-contextmenu="handleCanvasContextMenu"
           @clipping-change="handleViewerClippingChange"
           @update:active-tool="activeTool = $event"
           @update:measurement-mode="setMeasurementMode"
@@ -5091,6 +5561,47 @@ onBeforeUnmount(() => {
           @clear-logs="clearRuntimeLogs"
         />
 
+        <!-- 画布右键工具栏 -->
+        <div
+          v-show="canvasContextToolbarVisible"
+          class="dd-canvas-context-toolbar"
+          :style="canvasContextToolbarStyle"
+          @click.stop
+          @contextmenu.prevent.stop
+        >
+          <el-tooltip content="选择当前物体" placement="top">
+            <button
+              type="button"
+              class="dd-canvas-context-action"
+              :disabled="!canvasContextToolbarHasObject"
+              @click.stop="selectCanvasContextObject"
+            >
+              <el-icon><Pointer /></el-icon>
+              <span>选择当前物体</span>
+            </button>
+          </el-tooltip>
+          <el-tooltip content="添加点位" placement="top">
+            <button
+              type="button"
+              class="dd-canvas-context-action"
+              @click.stop="openCanvasContextCreateAnchor('anchor')"
+            >
+              <el-icon><Position /></el-icon>
+              <span>添加点位</span>
+            </button>
+          </el-tooltip>
+          <el-tooltip content="添加摄像头" placement="top">
+            <button
+              type="button"
+              class="dd-canvas-context-action"
+              @click.stop="openCanvasContextCreateAnchor('camera')"
+            >
+              <el-icon><Camera /></el-icon>
+              <span>添加摄像头</span>
+            </button>
+          </el-tooltip>
+        </div>
+
         <SceneSettingsDialog
           v-model="settingsDialogVisible"
           :anchor-style="getAnchorStyleDefault('anchor')"
@@ -5152,18 +5663,129 @@ onBeforeUnmount(() => {
           :mode="documentDialogMode"
           :keyword="documentDialogKeyword"
           :loading="documentDialogLoading"
+          :folder-loading="documentDialogFolderLoading"
+          :folder-tree-data="documentDialogFolderTreeData"
+          :selected-folder-id="documentDialogFolderId"
           :records="documentDialogRecords"
           :pagination="documentDialogPagination"
           :selected-documents="documentDialogSelectedDocuments"
           :empty-text="documentDialogEmptyText"
           @update:keyword="documentDialogKeyword = $event"
           @search="searchDocumentOptions(documentDialogKeyword)"
+          @folder-change="onDocumentFolderChange"
           @selection-change="handleDocumentSelectionChange"
           @table-ref-change="documentDialogTableRef = $event"
           @size-change="onDocumentSizeChange"
           @page-change="onDocumentPageChange"
+          @document-detail="openBoundDocumentDetail"
+          @document-preview="openBoundDocumentPreview"
+          @document-download="downloadBoundDocument"
           @confirm="confirmDocumentDialog"
         />
+
+        <FilePreview
+          v-model:visible="boundDocumentPreviewVisible"
+          :row="boundDocumentPreviewRow"
+          @download="downloadBoundDocument"
+        />
+
+        <el-drawer
+          v-model="boundDocumentDetailVisible"
+          title="文档详情"
+          size="560px"
+        >
+          <div v-loading="boundDocumentDetailLoading" class="grid gap-4">
+            <template v-if="boundDocumentDetailRow">
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-base font-semibold truncate">
+                    {{ boundDocumentDetailRow.name }}
+                  </div>
+                  <div
+                    class="text-sm text-[var(--el-text-color-secondary)] mt-1"
+                  >
+                    类型：{{ boundDocumentDetailRow.type || "-" }} | 大小：{{
+                      formatDocumentSize(boundDocumentDetailRow.size)
+                    }}
+                  </div>
+                </div>
+                <el-space wrap>
+                  <el-button
+                    type="primary"
+                    @click="openBoundDocumentPreview(boundDocumentDetailRow)"
+                  >
+                    预览
+                  </el-button>
+                  <el-button
+                    @click="downloadBoundDocument(boundDocumentDetailRow)"
+                  >
+                    下载
+                  </el-button>
+                </el-space>
+              </div>
+
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="文档ID">
+                  {{ boundDocumentDetailRow.id || "-" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="所属目录">
+                  {{ boundDocumentDetailRow.folderId || "root" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="创建时间">
+                  {{ boundDocumentDetailRow.createdAt || "-" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="创建人">
+                  {{ boundDocumentDetailRow.createdBy || "-" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="更新时间">
+                  {{ boundDocumentDetailRow.updatedAt || "-" }}
+                </el-descriptions-item>
+                <el-descriptions-item label="更新人">
+                  {{ boundDocumentDetailRow.updatedBy || "-" }}
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <div>
+                <div class="mb-2 font-semibold">关联系统</div>
+                <div class="flex flex-wrap gap-2">
+                  <el-tag
+                    v-for="nodeId in boundDocumentDetailRow.nodeIds || []"
+                    :key="nodeId"
+                    effect="plain"
+                  >
+                    {{ getSystemNodeLabel(nodeId) }}
+                  </el-tag>
+                  <span
+                    v-if="!(boundDocumentDetailRow.nodeIds || []).length"
+                    class="text-sm text-[var(--el-text-color-secondary)]"
+                  >
+                    暂无
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <div class="mb-2 font-semibold">对象编码</div>
+                <div class="flex flex-wrap gap-2">
+                  <el-tag
+                    v-for="kks in boundDocumentDetailRow.kksRefs || []"
+                    :key="kks"
+                    effect="plain"
+                  >
+                    {{ kks }}
+                  </el-tag>
+                  <span
+                    v-if="!(boundDocumentDetailRow.kksRefs || []).length"
+                    class="text-sm text-[var(--el-text-color-secondary)]"
+                  >
+                    暂无
+                  </span>
+                </div>
+              </div>
+            </template>
+            <el-empty v-else description="暂无文档详情" />
+          </div>
+        </el-drawer>
 
         <PropertyBindingDialog
           v-model="propDialogVisible"
@@ -5255,6 +5877,50 @@ onBeforeUnmount(() => {
 .dd-canvas {
   flex: 1;
   overflow: hidden;
+}
+
+.dd-canvas-context-toolbar {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  width: 160px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  box-shadow: var(--el-box-shadow-light);
+}
+
+.dd-canvas-context-action {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+}
+
+.dd-canvas-context-action:hover:not(:disabled) {
+  color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
+}
+
+.dd-canvas-context-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .dd-nav-ctx-menu {

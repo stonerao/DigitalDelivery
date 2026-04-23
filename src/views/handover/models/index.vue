@@ -1,5 +1,12 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch
+} from "vue";
 import { ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { message } from "@/utils/message";
@@ -8,11 +15,16 @@ import {
   deleteHandoverModel,
   getHandoverModelDetail,
   getHandoverModelList,
+  getHandoverModelThumbnail,
   getHandoverModelUploadTask,
   updateHandoverModel,
   uploadHandoverModel
 } from "@/api/handoverModels";
-import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
+import {
+  createHandoverModelObjectUrl,
+  normalizeHandoverModelRecord,
+  unwrapHandoverModelThumbnailResponse
+} from "@/utils/handoverModel";
 
 defineOptions({
   name: "HandoverModels"
@@ -22,6 +34,10 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const models = ref([]);
+const thumbnailObjectUrls = ref({});
+const loadingThumbnailKeys = ref(new Set());
+const failedThumbnailSources = ref(new Set());
+const thumbnailRevokeMap = new Map();
 
 function unwrapData(resp) {
   return resp?.data ?? resp ?? {};
@@ -33,6 +49,7 @@ function readRecords(data) {
 
 function normalizeModelItem(item) {
   return normalizeHandoverModelRecord({
+    ...item,
     id: item?.id || "",
     name: item?.name || "未命名模型",
     lod: item?.lod || "LOD300",
@@ -40,8 +57,110 @@ function normalizeModelItem(item) {
     updatedAt: item?.updatedAt || "-",
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
-    url: item?.url || ""
+    url: item?.url || "",
+    thumbnailUrl: item?.thumbnailUrl || ""
   });
+}
+
+function getThumbnailKey(model) {
+  return `${model?.id || ""}|${model?.thumbnailUrl || ""}`;
+}
+
+function getThumbnailSrc(model) {
+  const key = getThumbnailKey(model);
+  return thumbnailObjectUrls.value[key] || String(model?.thumbnailUrl || "");
+}
+
+function hasThumbnailImage(model) {
+  const url = getThumbnailSrc(model).trim();
+  if (!url) return false;
+  return !failedThumbnailSources.value.has(url);
+}
+
+function onThumbnailError(model) {
+  const src = getThumbnailSrc(model).trim();
+  if (!src) return;
+  failedThumbnailSources.value = new Set([
+    ...failedThumbnailSources.value,
+    src
+  ]);
+}
+
+function setThumbnailLoading(key, value) {
+  const next = new Set(loadingThumbnailKeys.value);
+  if (value) {
+    next.add(key);
+  } else {
+    next.delete(key);
+  }
+  loadingThumbnailKeys.value = next;
+}
+
+function isThumbnailLoading(model) {
+  return loadingThumbnailKeys.value.has(getThumbnailKey(model));
+}
+
+function revokeThumbnailObjectUrl(key) {
+  const revoke = thumbnailRevokeMap.get(key);
+  if (revoke) {
+    revoke();
+    thumbnailRevokeMap.delete(key);
+  }
+
+  if (thumbnailObjectUrls.value[key]) {
+    const next = { ...thumbnailObjectUrls.value };
+    delete next[key];
+    thumbnailObjectUrls.value = next;
+  }
+}
+
+function revokeStaleThumbnailObjectUrls(modelList) {
+  const activeKeys = new Set(modelList.map(getThumbnailKey).filter(Boolean));
+  Object.keys(thumbnailObjectUrls.value).forEach(key => {
+    if (!activeKeys.has(key)) {
+      revokeThumbnailObjectUrl(key);
+    }
+  });
+}
+
+async function loadModelThumbnail(model) {
+  const key = getThumbnailKey(model);
+  if (!key || !model?.id || !model?.thumbnailUrl) return;
+  if (thumbnailObjectUrls.value[key] || loadingThumbnailKeys.value.has(key)) {
+    return;
+  }
+
+  setThumbnailLoading(key, true);
+  try {
+    const response = await getHandoverModelThumbnail(model.id);
+    const blob = await unwrapHandoverModelThumbnailResponse(response);
+    const { url, revoke } = createHandoverModelObjectUrl(blob);
+    if (!url) throw new Error("模型预览图地址生成失败");
+
+    revokeThumbnailObjectUrl(key);
+    thumbnailRevokeMap.set(key, revoke);
+    thumbnailObjectUrls.value = {
+      ...thumbnailObjectUrls.value,
+      [key]: url
+    };
+  } catch (error) {
+    console.error("[handover/models] load thumbnail failed:", error);
+  } finally {
+    setThumbnailLoading(key, false);
+  }
+}
+
+function loadModelThumbnails(modelList) {
+  revokeStaleThumbnailObjectUrls(modelList);
+  modelList.forEach(model => {
+    loadModelThumbnail(model);
+  });
+}
+
+function revokeAllThumbnailObjectUrls() {
+  [...thumbnailRevokeMap.values()].forEach(revoke => revoke());
+  thumbnailRevokeMap.clear();
+  thumbnailObjectUrls.value = {};
 }
 
 async function loadModels(showSuccess = false) {
@@ -50,6 +169,7 @@ async function loadModels(showSuccess = false) {
     const res = await getHandoverModelList({ page: 1, size: 20 });
     const data = unwrapData(res);
     models.value = readRecords(data).map(normalizeModelItem);
+    loadModelThumbnails(models.value);
     if (showSuccess) {
       message("模型列表已刷新", { type: "success" });
     }
@@ -146,9 +266,11 @@ async function openView(model) {
       ...normalizeModelItem(detail),
       meta: detail?.meta || {}
     };
+    loadModelThumbnail(detailModel.value);
   } catch (error) {
     console.error("get model detail failed", error);
     detailModel.value = normalizeModelItem(model);
+    loadModelThumbnail(detailModel.value);
     message("获取模型详情失败，已显示列表数据", { type: "warning" });
   }
   detailVisible.value = true;
@@ -228,6 +350,10 @@ onMounted(() => {
   loadModels().then(() => locateModelById());
 });
 
+onBeforeUnmount(() => {
+  revokeAllThumbnailObjectUrls();
+});
+
 watch(
   () => route.query?.id,
   () => {
@@ -252,56 +378,45 @@ watch(
       </div>
     </div>
 
-    <el-row v-loading="loading" :gutter="16">
-      <el-col
+    <div v-loading="loading" class="dd-model-grid">
+      <el-card
         v-for="model in gridModels"
+        :id="`model-card-${model.id}`"
         :key="model.id"
-        :xs="24"
-        :sm="12"
-        :md="8"
-        class="mb-4"
+        shadow="never"
+        :class="model.id === highlightModelId ? 'dd-model-highlight' : ''"
       >
-        <el-card
-          :id="`model-card-${model.id}`"
-          shadow="never"
-          :class="model.id === highlightModelId ? 'dd-model-highlight' : ''"
-        >
-          <div
-            class="mb-3 p-4 rounded text-center bg-[var(--el-fill-color-light)]"
-          >
-            <span class="text-sm text-[var(--el-text-color-secondary)]">
-              模型预览
-            </span>
+        <div class="dd-model-thumb mb-3">
+          <img
+            v-if="hasThumbnailImage(model)"
+            :src="getThumbnailSrc(model)"
+            :alt="`${model.name || '模型'}预览图`"
+            class="dd-model-thumb__image"
+            loading="lazy"
+            decoding="async"
+            @error="onThumbnailError(model)"
+          />
+          <div v-else class="dd-model-thumb__placeholder">
+            {{ isThumbnailLoading(model) ? "加载中" : "暂无预览图" }}
           </div>
-          <div class="font-semibold truncate">{{ model.name }}</div>
-          <div class="text-sm text-[var(--el-text-color-secondary)] mt-1">
-            精度：{{ model.lod }}，构件：{{ model.components }} 个
-          </div>
-          <div class="text-xs text-[var(--el-text-color-secondary)] mt-1">
-            更新：{{ model.updatedAt }}
-          </div>
-          <div class="mt-3 flex gap-2">
-            <el-button
-              type="primary"
-              class="flex-1"
-              @click="openPreview(model)"
-            >
-              预览
-            </el-button>
-            <el-button class="flex-1" @click="openView(model)">查看</el-button>
-            <el-button class="flex-1" @click="openEdit(model)">编辑</el-button>
-            <el-button
-              class="flex-1"
-              type="danger"
-              plain
-              @click="removeModel(model)"
-            >
-              删除
-            </el-button>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </div>
+        <div class="font-semibold truncate">{{ model.name }}</div>
+        <div class="text-sm text-[var(--el-text-color-secondary)] mt-1">
+          精度：{{ model.lod }}，构件：{{ model.components }} 个
+        </div>
+        <div class="text-xs text-[var(--el-text-color-secondary)] mt-1">
+          更新：{{ model.updatedAt }}
+        </div>
+        <div class="dd-model-actions mt-3">
+          <el-button type="primary" @click="openPreview(model)">预览</el-button>
+          <el-button @click="openView(model)">查看</el-button>
+          <el-button @click="openEdit(model)">编辑</el-button>
+          <el-button type="danger" plain @click="removeModel(model)">
+            删除
+          </el-button>
+        </div>
+      </el-card>
+    </div>
 
     <ModelPreviewUploadDialog
       v-model="uploadVisible"
@@ -310,6 +425,19 @@ watch(
 
     <el-dialog v-model="detailVisible" title="模型详情" width="560px">
       <div v-if="detailModel" class="text-sm">
+        <div class="dd-model-detail-thumb mb-4">
+          <img
+            v-if="hasThumbnailImage(detailModel)"
+            :src="getThumbnailSrc(detailModel)"
+            :alt="`${detailModel.name || '模型'}预览图`"
+            class="dd-model-thumb__image"
+            decoding="async"
+            @error="onThumbnailError(detailModel)"
+          />
+          <div v-else class="dd-model-thumb__placeholder">
+            {{ isThumbnailLoading(detailModel) ? "加载中" : "暂无预览图" }}
+          </div>
+        </div>
         <div class="mb-2">
           <span class="font-semibold">名称：</span>{{ detailModel.name }}
         </div>
@@ -368,5 +496,83 @@ watch(
 <style scoped>
 .dd-model-highlight {
   border-color: var(--el-color-primary) !important;
+}
+
+.dd-model-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dd-model-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dd-model-actions :deep(.el-button) {
+  width: 100%;
+  margin-left: 0;
+}
+
+.dd-model-thumb,
+.dd-model-detail-thumb {
+  position: relative;
+  overflow: hidden;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.dd-model-thumb {
+  aspect-ratio: 16 / 9;
+}
+
+.dd-model-detail-thumb {
+  max-height: 260px;
+  aspect-ratio: 16 / 9;
+}
+
+.dd-model-thumb__image,
+.dd-model-thumb__placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.dd-model-thumb__image {
+  display: block;
+  object-fit: cover;
+}
+
+.dd-model-thumb__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+@media (width <= 1399px) {
+  .dd-model-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (width <= 1199px) {
+  .dd-model-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (width <= 767px) {
+  .dd-model-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (width <= 520px) {
+  .dd-model-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

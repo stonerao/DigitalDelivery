@@ -152,24 +152,60 @@ export class ObjectPicker {
    * 获取选中对象的属性
    */
   getSelectedProperties() {
-    if (!this.selectedObject) return null;
-    const meshes = this._collectSelectionMeshes(this.selectedObject);
-    const representativeMesh = meshes[0] || this.selectedObject;
+    return this.getObjectProperties(this.selectedObject);
+  }
+
+  getObjectProperties(obj) {
+    const target = this._resolveSelectionTarget(obj);
+    if (!target) return null;
+    const meshes = this._collectSelectionMeshes(target);
+    const representativeMesh = meshes[0] || target;
     return {
-      name: this.selectedObject.name || representativeMesh.name || "未命名",
-      uuid: representativeMesh.uuid || this.selectedObject.uuid,
-      objectUuid: this.selectedObject.uuid,
+      name: target.name || representativeMesh.name || "未命名",
+      uuid: representativeMesh.uuid || target.uuid,
+      objectUuid: target.uuid,
       meshUuids: meshes.map(item => item.uuid),
-      type: this.selectedObject.type,
-      userData: this.selectedObject.userData,
-      geometry: this._buildGeometrySummary(
-        meshes,
-        this.selectedObject.geometry
-      ),
-      boundingBox: this._getBoundingBox(this.selectedObject),
-      position: this.selectedObject.position.toArray(),
-      rotation: this.selectedObject.rotation.toArray().slice(0, 3),
-      scale: this.selectedObject.scale.toArray()
+      type: target.type,
+      userData: target.userData,
+      geometry: this._buildGeometrySummary(meshes, target.geometry),
+      boundingBox: this._getBoundingBox(target),
+      position: target.position.toArray(),
+      rotation: target.rotation.toArray().slice(0, 3),
+      scale: target.scale.toArray()
+    };
+  }
+
+  pickAtClientPoint(clientX, clientY, options = {}) {
+    const { select = false, emitEvent = true } = options || {};
+    const hit = this._raycastClientPoint(clientX, clientY);
+
+    if (select) {
+      this.clearHighlight();
+      this.clearSelection();
+    }
+
+    if (!hit) return null;
+
+    const resolvedTarget = this._resolveSelectionTarget(hit.object);
+    if (!resolvedTarget) return null;
+
+    if (select) {
+      this._selectObject(hit.object);
+    }
+
+    const properties = select
+      ? this.getSelectedProperties()
+      : this.getObjectProperties(resolvedTarget);
+    const point = hit.point?.clone?.() || null;
+
+    if (select && emitEvent && this.onSelect) {
+      this.onSelect(resolvedTarget, properties, point);
+    }
+
+    return {
+      object: resolvedTarget,
+      properties,
+      point
     };
   }
 
@@ -306,32 +342,7 @@ export class ObjectPicker {
     if (!this.enabled) return;
     if (event.button !== 0) return;
     if (event.defaultPrevented || this.shouldIgnoreEvent?.(event)) return;
-    if (this.pickTargetsDirty) this.refreshPickTargets();
-    if (!this.pickTargets?.length) return;
-
-    const rect = this._getContainerRect();
-    if (!rect) return;
-    if (
-      event.clientX < rect.left ||
-      event.clientX > rect.left + rect.width ||
-      event.clientY < rect.top ||
-      event.clientY > rect.top + rect.height
-    ) {
-      return;
-    }
-    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.mouse, this.camera);
-    this.intersections.length = 0;
-    const visibleTargets = getVisibleMeshes(this.pickTargets, this.camera);
-    const intersects = this.raycaster.intersectObjects(
-      visibleTargets,
-      false,
-      this.intersections
-    );
-
-    const hit = intersects[0];
+    const hit = this._raycastClientPoint(event.clientX, event.clientY);
 
     // 先移除悬停材质，再应用选中材质，避免把 hover 克隆材质记成选中的原材质。
     this.clearHighlight();
@@ -361,6 +372,35 @@ export class ObjectPicker {
 
   _markContainerRectDirty() {
     this.containerRectDirty = true;
+  }
+
+  _raycastClientPoint(clientX, clientY) {
+    if (this.pickTargetsDirty) this.refreshPickTargets();
+    if (!this.pickTargets?.length) return null;
+
+    const rect = this._getContainerRect();
+    if (!rect) return null;
+    if (
+      clientX < rect.left ||
+      clientX > rect.left + rect.width ||
+      clientY < rect.top ||
+      clientY > rect.top + rect.height
+    ) {
+      return null;
+    }
+    this.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    this.intersections.length = 0;
+    const visibleTargets = getVisibleMeshes(this.pickTargets, this.camera);
+    const intersects = this.raycaster.intersectObjects(
+      visibleTargets,
+      false,
+      this.intersections
+    );
+
+    return intersects[0] || null;
   }
 
   _getContainerRect() {
