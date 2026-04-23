@@ -198,6 +198,10 @@ export class MeasureTool {
     this.refreshPickTargets();
   }
 
+  markPickTargetsDirty() {
+    this.pickTargetsDirty = true;
+  }
+
   refreshPickTargets() {
     const root = this.pickRoot || this.scene;
     const list = [];

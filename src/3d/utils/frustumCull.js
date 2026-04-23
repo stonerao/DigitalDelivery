@@ -8,6 +8,13 @@ const _frustum = new THREE.Frustum();
 const _projScreenMatrix = new THREE.Matrix4();
 const _sphere = new THREE.Sphere();
 
+function isObjectVisibleInHierarchy(obj) {
+  for (let current = obj; current; current = current.parent) {
+    if (current.visible === false) return false;
+  }
+  return true;
+}
+
 /**
  * 返回在相机视锥内的 mesh 子集（基于 boundingSphere 快速剔除）
  * @param {THREE.Mesh[]} meshes - 待检查的 mesh 列表
@@ -26,7 +33,7 @@ export function getVisibleMeshes(meshes, camera) {
   const visible = [];
   for (let i = 0; i < meshes.length; i++) {
     const mesh = meshes[i];
-    if (!mesh.visible) continue;
+    if (!isObjectVisibleInHierarchy(mesh)) continue;
 
     const geo = mesh.geometry;
     if (!geo) {

@@ -1280,7 +1280,10 @@ const runtimeAssetGroups = computed(() =>
 );
 
 const viewerRef = ref(null);
+let sceneAnchorSyncSignature = "";
+
 function handleViewerRefChange(value) {
+  sceneAnchorSyncSignature = "";
   viewerRef.value = value;
 }
 
@@ -2696,9 +2699,55 @@ function areSceneOverlaysSuppressed() {
   return Boolean(enableClipping.value || runtimeClippingState.value?.enabled);
 }
 
-function syncSceneAnchors() {
-  if (!viewerAdapter.isReady()) return;
+function buildAnchorSyncItemSignature(item = {}) {
+  const position = Array.isArray(item.position) ? item.position : [];
+  const style = item.style || {};
+  return [
+    item.id || "",
+    item.type || "",
+    item.name || "",
+    item.label || "",
+    item.displayText || "",
+    item.visible === false ? "0" : "1",
+    item.status || "",
+    position.map(value => Number(value || 0).toFixed(3)).join(","),
+    style.color || "",
+    style.iconUrl || "",
+    style.iconSize || "",
+    style.iconWidth || "",
+    style.labelWidth || "",
+    style.labelHeight || "",
+    style.showLabel === true ? "1" : style.showLabel === false ? "0" : ""
+  ].join("~");
+}
+
+function buildSceneAnchorSyncSignature(suppressed) {
+  return [
+    viewerModelUrl.value || "",
+    suppressed ? "1" : "0",
+    anchorMarkersVisible.value ? "1" : "0",
+    cameraMarkersVisible.value ? "1" : "0",
+    suppressed
+      ? ""
+      : renderableAnchors.value.map(buildAnchorSyncItemSignature).join("|"),
+    suppressed
+      ? ""
+      : renderableCameraAnchors.value
+          .map(buildAnchorSyncItemSignature)
+          .join("|")
+  ].join("::");
+}
+
+function syncSceneAnchors({ force = false } = {}) {
+  if (!viewerAdapter.isReady()) {
+    sceneAnchorSyncSignature = "";
+    return;
+  }
   const suppressed = areSceneOverlaysSuppressed();
+  const signature = buildSceneAnchorSyncSignature(suppressed);
+  if (!force && signature === sceneAnchorSyncSignature) return;
+
+  sceneAnchorSyncSignature = signature;
   viewerAdapter.setAnchors(suppressed ? [] : renderableAnchors.value);
   viewerAdapter.setAnchorsVisible(anchorMarkersVisible.value && !suppressed);
   viewerAdapter.setCameraAnchors(
@@ -5166,6 +5215,7 @@ async function showAllObjects() {
 }
 
 function handleViewerLoaded() {
+  sceneAnchorSyncSignature = "";
   handleViewerLoadedLifecycle({
     runtimeStore,
     viewerAdapter,

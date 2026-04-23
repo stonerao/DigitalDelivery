@@ -36,6 +36,7 @@ export class ObjectPicker {
     this.containerRect = null;
     this.containerRectDirty = true;
     this.sceneTreeCache = null;
+    this.sceneTreeCacheRoot = null;
     this.sceneTreeDirty = true;
 
     this._onMouseMove = this._onMouseMove.bind(this);
@@ -92,9 +93,15 @@ export class ObjectPicker {
     this.refreshPickTargets();
   }
 
+  markPickTargetsDirty({ sceneTree = true } = {}) {
+    this.pickTargetsDirty = true;
+    if (sceneTree) this.markSceneTreeDirty();
+  }
+
   markSceneTreeDirty() {
     this.sceneTreeDirty = true;
     this.sceneTreeCache = null;
+    this.sceneTreeCacheRoot = null;
   }
 
   refreshPickTargets() {
@@ -214,13 +221,15 @@ export class ObjectPicker {
    */
   buildSceneTree(root = null) {
     const startNode = root || this.scene;
-    if (root) {
-      return this._buildTreeNode(startNode);
-    }
-    if (!this.sceneTreeDirty && this.sceneTreeCache) {
+    if (
+      !this.sceneTreeDirty &&
+      this.sceneTreeCache &&
+      this.sceneTreeCacheRoot === startNode
+    ) {
       return this.sceneTreeCache;
     }
     this.sceneTreeCache = this._buildTreeNode(startNode);
+    this.sceneTreeCacheRoot = startNode;
     this.sceneTreeDirty = false;
     return this.sceneTreeCache;
   }
@@ -280,6 +289,7 @@ export class ObjectPicker {
       const p = this.lastHoverPoint;
       this.lastHoverPoint = null;
       if (!p || !this.enabled) return;
+      if (this.pickTargetsDirty) this.refreshPickTargets();
       if (!this.pickTargets?.length) {
         this.clearHighlight();
         return;
@@ -293,11 +303,6 @@ export class ObjectPicker {
         p.y < rect.top ||
         p.y > rect.top + rect.height
       ) {
-        return;
-      }
-      if (this.pickTargetsDirty) this.refreshPickTargets();
-      if (!this.pickTargets?.length) {
-        this.clearHighlight();
         return;
       }
       const now = performance.now();

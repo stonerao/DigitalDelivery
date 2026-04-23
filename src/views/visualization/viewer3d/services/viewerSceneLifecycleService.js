@@ -1,5 +1,43 @@
 import { nextTick } from "vue";
 
+function scheduleIdleTask(callback) {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(callback, { timeout: 1200 });
+    return;
+  }
+  window.setTimeout(callback, 0);
+}
+
+function deferViewerStartupWork(tasks) {
+  const queue = (Array.isArray(tasks) ? tasks : [tasks]).filter(
+    task => typeof task === "function"
+  );
+  if (!queue.length) return;
+
+  const runBatch = deadline => {
+    if (typeof window.requestIdleCallback === "function") {
+      while (
+        queue.length &&
+        (!deadline?.timeRemaining || deadline.timeRemaining() > 6)
+      ) {
+        queue.shift()?.();
+      }
+      if (queue.length) scheduleIdleTask(runBatch);
+      return;
+    }
+    queue.shift()?.();
+    if (queue.length) scheduleIdleTask(runBatch);
+  };
+
+  const runWhenIdle = () => scheduleIdleTask(runBatch);
+
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => runWhenIdle());
+    return;
+  }
+  runWhenIdle();
+}
+
 export function handleViewerLoadedLifecycle({
   runtimeStore,
   viewerAdapter,
@@ -24,15 +62,6 @@ export function handleViewerLoadedLifecycle({
   nextTick(() => {
     viewerAdapter.resetView?.();
   });
-  refreshSceneTree();
-  refreshSceneDevices();
-  void syncSceneObjectRelationsFromBackend();
-  syncRoamingState();
-  syncMeasurementPoints();
-  syncMeasurementRecordsToViewer();
-  syncSceneAnchors();
-  applyAssetGroupVisibility();
-  syncLayerTreeSelection();
   viewerAdapter.setQuality(quality);
   viewerAdapter.setMaterialTheme(materialTheme);
   viewerAdapter.setClippingState(runtimeClippingState);
@@ -50,7 +79,18 @@ export function handleViewerLoadedLifecycle({
       totalMeshCount: 0
     }
   );
-  syncRuntimeServices();
+  deferViewerStartupWork([
+    refreshSceneTree,
+    refreshSceneDevices,
+    () => void syncSceneObjectRelationsFromBackend(),
+    syncRoamingState,
+    syncMeasurementPoints,
+    syncMeasurementRecordsToViewer,
+    syncSceneAnchors,
+    applyAssetGroupVisibility,
+    syncLayerTreeSelection,
+    syncRuntimeServices
+  ]);
 }
 
 export function resetViewerSceneOnModelChange({

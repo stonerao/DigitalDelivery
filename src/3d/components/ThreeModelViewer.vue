@@ -99,8 +99,16 @@ const effectiveMaterialTheme = computed(() =>
 
 const originalMaterialsByUUID = new Map();
 const basicMaterialCacheWithTextures = new WeakMap();
-const basicMaterialCacheNoTextures = new WeakMap();
 const basicWireframeMaterialCache = new WeakMap();
+const lowQualityMaterialVariantCache = new WeakMap();
+
+const LOW_QUALITY_FALLBACK_COLORS = [
+  0x8c949a, 0x697782, 0xa19c91, 0x7c8b8f, 0x8b8f7b, 0x6f7f95, 0x9a8f82,
+  0x798884, 0x7b8190, 0x9b998e
+];
+const LOW_QUALITY_LIGHT_SURFACE_COLORS = [
+  0xc6c8c1, 0xb8c0c5, 0xc9c3b8, 0xb7c3bf
+];
 
 // low 档：从贴图采样“代表色”，避免纯白/同色导致构件难以区分
 const representativeColorByTexture = new WeakMap();
@@ -185,6 +193,20 @@ function getSceneModelRuntimeSignature(models = resolvedSceneModels.value) {
       ].join("::")
     )
     .join("||");
+}
+
+function array3DiffersFromVector3(vector, values = [], fallback = [0, 0, 0]) {
+  const x = Number(values[0] ?? fallback[0]);
+  const y = Number(values[1] ?? fallback[1]);
+  const z = Number(values[2] ?? fallback[2]);
+  return vector.x !== x || vector.y !== y || vector.z !== z;
+}
+
+function array3DiffersFromEuler(euler, values = [], fallback = [0, 0, 0]) {
+  const x = Number(values[0] ?? fallback[0]);
+  const y = Number(values[1] ?? fallback[1]);
+  const z = Number(values[2] ?? fallback[2]);
+  return euler.x !== x || euler.y !== y || euler.z !== z;
 }
 
 const TEXTURE_KEYS = [
@@ -356,6 +378,75 @@ function getRepresentativeColorForMaterial(mat) {
   return null;
 }
 
+function getColorLuminance(color) {
+  if (!color) return 1;
+  return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+}
+
+function isLowQualityColorTooPale(color) {
+  if (!color) return true;
+  const max = Math.max(color.r, color.g, color.b);
+  const min = Math.min(color.r, color.g, color.b);
+  const saturation = max > 0 ? (max - min) / max : 0;
+  return max > 0.82 && getColorLuminance(color) > 0.72 && saturation < 0.16;
+}
+
+function hashString(value = "") {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function getLowQualityMaterialCache(src, variantKey) {
+  let variants = lowQualityMaterialVariantCache.get(src);
+  if (!variants) {
+    variants = new Map();
+    lowQualityMaterialVariantCache.set(src, variants);
+  }
+  return variants.get(variantKey);
+}
+
+function setLowQualityMaterialCache(src, variantKey, material) {
+  let variants = lowQualityMaterialVariantCache.get(src);
+  if (!variants) {
+    variants = new Map();
+    lowQualityMaterialVariantCache.set(src, variants);
+  }
+  variants.set(variantKey, material);
+}
+
+function resolveLowQualityMaterialColor(src, seed = "") {
+  const representative = getRepresentativeColorForMaterial(src);
+  if (representative && !isLowQualityColorTooPale(representative)) {
+    return {
+      color: representative,
+      variantKey: `rep:${representative.getHexString()}`
+    };
+  }
+
+  if (src?.color && !isLowQualityColorTooPale(src.color)) {
+    return {
+      color: src.color,
+      variantKey: `src:${src.color.getHexString()}`
+    };
+  }
+
+  const lightSurface = Boolean(representative || src?.color);
+  const seedKey = `${src?.uuid || src?.name || "material"}:${seed}`;
+  const palette = lightSurface
+    ? LOW_QUALITY_LIGHT_SURFACE_COLORS
+    : LOW_QUALITY_FALLBACK_COLORS;
+  const paletteIndex = hashString(seedKey) % palette.length;
+  return {
+    color: new THREE.Color(palette[paletteIndex]),
+    variantKey: `${lightSurface ? "light" : "fallback"}:${paletteIndex}`
+  };
+}
+
 function detachTexturesFromMaterial(mat) {
   if (!mat || detachedTextureCache.has(mat)) return false;
 
@@ -389,15 +480,6 @@ function restoreTexturesToMaterial(mat) {
   detachedMaterials.delete(mat);
   mat.needsUpdate = true;
   return true;
-}
-
-function detachTexturesFromOriginalMaterials() {
-  const uniqueMats = new Set();
-  originalMaterialsByUUID.forEach(mat => {
-    const list = Array.isArray(mat) ? mat : [mat];
-    list.filter(Boolean).forEach(m => uniqueMats.add(m));
-  });
-  uniqueMats.forEach(m => detachTexturesFromMaterial(m));
 }
 
 function restoreTexturesFromOriginalMaterials() {
@@ -438,30 +520,44 @@ function captureOriginalMaterials(root) {
   });
 }
 
-function toBasicMaterial(src, { keepTextures, wireframe = false } = {}) {
+function toBasicMaterial(
+  src,
+  { keepTextures, wireframe = false, seed = "" } = {}
+) {
   if (!src) return src;
   if (src.isMeshBasicMaterial && !wireframe) {
     if (keepTextures) return src;
-    // low 档：仅当完全无贴图时可复用
-    if (!src.map && !src.alphaMap && !src.aoMap && !src.lightMap) return src;
+    // low 档：仅当无贴图且颜色不偏白时复用原材质
+    if (
+      !src.map &&
+      !src.alphaMap &&
+      !src.aoMap &&
+      !src.lightMap &&
+      !isLowQualityColorTooPale(src.color)
+    ) {
+      return src;
+    }
   }
 
-  const cache = wireframe
-    ? basicWireframeMaterialCache
-    : keepTextures
-      ? basicMaterialCacheWithTextures
-      : basicMaterialCacheNoTextures;
-  const cached = cache.get(src);
-  if (cached) {
-    // low 档：尽可能用贴图代表色修正基础色
-    if (!keepTextures && !wireframe && cached.color) {
-      const rep = getRepresentativeColorForMaterial(src);
-      if (rep) {
-        cached.color.copy(rep);
-        cached.needsUpdate = true;
-      }
-    }
-    return cached;
+  let cache = null;
+  let lowColor = null;
+  let lowVariantKey = "";
+
+  if (wireframe) {
+    cache = basicWireframeMaterialCache;
+  } else if (keepTextures) {
+    cache = basicMaterialCacheWithTextures;
+  } else {
+    const resolved = resolveLowQualityMaterialColor(src, seed);
+    lowColor = resolved.color;
+    lowVariantKey = resolved.variantKey;
+    const cached = getLowQualityMaterialCache(src, lowVariantKey);
+    if (cached) return cached;
+  }
+
+  if (cache) {
+    const cached = cache.get(src);
+    if (cached) return cached;
   }
 
   const params = {
@@ -477,8 +573,7 @@ function toBasicMaterial(src, { keepTextures, wireframe = false } = {}) {
 
   // low 档：纯色（优先从贴图采样代表色，否则沿用原材质颜色）
   if (!keepTextures) {
-    const rep = getRepresentativeColorForMaterial(src);
-    if (rep) params.color = rep;
+    params.color = lowColor;
   }
   if (!params.color && src.color) params.color = src.color;
   if (!params.color) params.color = new THREE.Color(0xffffff);
@@ -504,49 +599,86 @@ function toBasicMaterial(src, { keepTextures, wireframe = false } = {}) {
         : "basic-no-texture";
   basic.needsUpdate = true;
 
-  cache.set(src, basic);
+  if (cache) {
+    cache.set(src, basic);
+  } else {
+    setLowQualityMaterialCache(src, lowVariantKey, basic);
+  }
   return basic;
 }
 
-function applyMaterialQuality(quality) {
+function getMaterialModeForQuality(quality) {
   const q = normalizeQuality(quality);
   const theme = effectiveMaterialTheme.value;
-  const materialMode =
-    theme === "wireframe"
-      ? "wireframe"
-      : q === "low"
-        ? "low"
-        : q === "medium"
-          ? "medium"
-          : theme === "original"
-            ? "high"
-            : theme === "basic"
-              ? "low"
-              : "medium";
+  return theme === "wireframe"
+    ? "wireframe"
+    : q === "low"
+      ? "low"
+      : q === "medium"
+        ? "medium"
+        : theme === "original"
+          ? "high"
+          : theme === "basic"
+            ? "low"
+            : "medium";
+}
+
+function applyMaterialTransparentState(material, enabled, opacity = 0.35) {
+  const mats = Array.isArray(material) ? material : [material];
+  mats.filter(Boolean).forEach(m => {
+    m.transparent = Boolean(enabled);
+    m.opacity = enabled ? opacity : 1;
+    m.depthWrite = !enabled;
+    m.needsUpdate = true;
+  });
+}
+
+function forEachMaterial(material, callback) {
+  const mats = Array.isArray(material) ? material : [material];
+  mats.filter(Boolean).forEach(callback);
+}
+
+function applyMaterialQuality(quality, options = {}) {
+  const q = normalizeQuality(quality);
+  const materialMode = getMaterialModeForQuality(q);
+  const transparent = Boolean(options.transparent);
+  const shadowsEnabled = Boolean(options.shadowsEnabled);
+  const detachOriginalTextures = Boolean(options.detachOriginalTextures);
   const keepTextures = materialMode === "medium";
 
   modelGroup.traverse(obj => {
     if (!obj?.isMesh) return;
     if (obj.userData?.isHelper || obj.userData?.isMeasure) return;
 
+    obj.castShadow = shadowsEnabled;
+    obj.receiveShadow = shadowsEnabled;
+
     const original = originalMaterialsByUUID.get(obj.uuid) ?? obj.material;
     if (materialMode === "high") {
       obj.material = original;
+      applyMaterialTransparentState(obj.material, transparent);
       return;
     }
 
     const next = Array.isArray(original)
-      ? original.map(m =>
+      ? original.map((m, materialIndex) =>
           toBasicMaterial(m, {
             keepTextures,
-            wireframe: materialMode === "wireframe"
+            wireframe: materialMode === "wireframe",
+            seed: `${obj.uuid}:${obj.name || ""}:${materialIndex}`
           })
         )
       : toBasicMaterial(original, {
           keepTextures,
-          wireframe: materialMode === "wireframe"
+          wireframe: materialMode === "wireframe",
+          seed: `${obj.uuid}:${obj.name || ""}`
         });
     obj.material = next;
+    applyMaterialTransparentState(obj.material, transparent);
+
+    if (detachOriginalTextures) {
+      forEachMaterial(original, mat => detachTexturesFromMaterial(mat));
+    }
   });
 }
 
@@ -596,6 +728,7 @@ let perspectiveCamera;
 let orthographicCamera;
 let controls;
 let resizeObserver;
+let resizeRafId = 0;
 let canvasEl;
 let rafId = 0;
 let isLoopRunning = false;
@@ -609,6 +742,7 @@ let lastRenderAt = 0;
 let lastInteractionAt = 0;
 let loadedSceneModelResourceSignature = "";
 let initialFpsSample = null;
+const rendererViewportSize = new THREE.Vector2();
 
 let pointerDown = null;
 let onPointerDown;
@@ -638,6 +772,10 @@ const firstPersonKeys = {
   ShiftLeft: false,
   ShiftRight: false
 };
+const FIRST_PERSON_MOVE_KEYS = ["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"];
+const firstPersonMoveVector = new THREE.Vector3();
+const firstPersonForwardVector = new THREE.Vector3();
+const firstPersonRightVector = new THREE.Vector3();
 let firstPersonYaw = 0;
 let firstPersonPitch = 0;
 
@@ -663,15 +801,20 @@ const modelGroup = new THREE.Group();
 const linkedPointGroup = new THREE.Group();
 const anchorGroup = new THREE.Group();
 const cameraAnchorGroup = new THREE.Group();
+const fixedScreenSprites = new Set();
 let lastBounds = null;
 const isOrthographic = ref(false);
 let bvhPatched = false;
+let bvhBuildRequestId = 0;
+let bvhBuildIdleHandle = 0;
+let bvhBuildIdleType = "";
 
 // 动态像素比自适应
 let dynamicPixelRatio = null; // null = 使用画质配置默认值
 let lastDprAdjustAt = 0;
 const DPR_ADJUST_INTERVAL = 2000; // 每 2s 评估一次
 const DPR_MIN = 0.75;
+const DEEP_IDLE_RENDER_STOP_MS = 30000;
 
 // 纹理内存预算器
 let textureBudget = null;
@@ -773,13 +916,25 @@ function applyFixedScreenSpriteScale(sprite) {
   sprite.scale.set(scale.x, scale.y, sprite.scale.z || 1);
 }
 
+function registerFixedScreenSprite(sprite) {
+  if (sprite?.userData?.fixedScreenSize) fixedScreenSprites.add(sprite);
+}
+
+function unregisterFixedScreenSprites(root) {
+  root?.traverse?.(obj => {
+    if (obj?.isSprite && obj.userData?.fixedScreenSize) {
+      fixedScreenSprites.delete(obj);
+    }
+  });
+}
+
 function updateFixedScreenSprites() {
-  [linkedPointGroup, anchorGroup, cameraAnchorGroup].forEach(group => {
-    group.traverse(obj => {
-      if (obj?.isSprite && obj.userData?.fixedScreenSize) {
-        applyFixedScreenSpriteScale(obj);
-      }
-    });
+  fixedScreenSprites.forEach(sprite => {
+    if (!sprite?.parent) {
+      fixedScreenSprites.delete(sprite);
+      return;
+    }
+    applyFixedScreenSpriteScale(sprite);
   });
 }
 
@@ -970,6 +1125,7 @@ function createBadgeSprite(text, color, options = {}) {
       fallbackHeight: DEFAULT_SCREEN_LABEL_SIZE
     });
     applyFixedScreenSpriteScale(sprite);
+    registerFixedScreenSprite(sprite);
   } else {
     sprite.scale.set(
       (options.scaleX || canvas.width / 120) * viewportScale,
@@ -1024,6 +1180,7 @@ function createImageSprite(texture, options = {}) {
       fallbackHeight: options.screenHeight || DEFAULT_CAMERA_ICON_WIDTH
     });
     applyFixedScreenSpriteScale(sprite);
+    registerFixedScreenSprite(sprite);
   } else {
     sprite.scale.set(
       (options.scaleX || 0.5) * viewportScale * attenuationBoost,
@@ -1120,6 +1277,7 @@ function getObjectWorldPositionByUUID(uuid) {
 function clearLinkedPoints() {
   while (linkedPointGroup.children.length) {
     const child = linkedPointGroup.children.pop();
+    unregisterFixedScreenSprites(child);
     child.traverse?.(node => {
       node.geometry?.dispose?.();
       if (node.material?.map?.dispose) node.material.map.dispose();
@@ -1131,6 +1289,7 @@ function clearLinkedPoints() {
 function clearAnchorObjects(targetGroup, targetMap) {
   while (targetGroup.children.length) {
     const child = targetGroup.children.pop();
+    unregisterFixedScreenSprites(child);
     child.traverse?.(node => {
       node.geometry?.dispose?.();
       if (node.material?.userData?.ownsTexture && node.material?.map?.dispose) {
@@ -1295,31 +1454,37 @@ function renderCameraAnchors() {
 function setAnchors(anchors = []) {
   sceneAnchors = Array.isArray(anchors) ? anchors : [];
   renderSceneAnchors();
+  noteUserInteraction();
 }
 
 function setCameraAnchors(anchors = []) {
   sceneCameraAnchors = Array.isArray(anchors) ? anchors : [];
   renderCameraAnchors();
+  noteUserInteraction();
 }
 
 function clearAnchors() {
   sceneAnchors = [];
   renderSceneAnchors();
+  noteUserInteraction();
 }
 
 function clearCameraAnchors() {
   sceneCameraAnchors = [];
   renderCameraAnchors();
+  noteUserInteraction();
 }
 
 function setAnchorsVisible(visible) {
   anchorsVisible = Boolean(visible);
   anchorGroup.visible = anchorsVisible;
+  noteUserInteraction();
 }
 
 function setCameraAnchorsVisible(visible) {
   cameraAnchorsVisible = Boolean(visible);
   cameraAnchorGroup.visible = cameraAnchorsVisible;
+  noteUserInteraction();
 }
 
 function findAnchorHit(event) {
@@ -1349,6 +1514,7 @@ function findAnchorHit(event) {
 function setLinkedPointsVisible(visible) {
   linkedPointVisible = Boolean(visible);
   linkedPointGroup.visible = linkedPointVisible;
+  noteUserInteraction();
 }
 
 function setLinkedPoints(points = []) {
@@ -1385,6 +1551,7 @@ function setLinkedPoints(points = []) {
 
     linkedPointGroup.add(group);
   });
+  noteUserInteraction();
 }
 
 function createCamera(width, height) {
@@ -1422,7 +1589,7 @@ function getQualityConfig(quality) {
   };
 }
 
-function applyShadowSettings(enabled) {
+function applyShadowSettings(enabled, { updateMeshes = true } = {}) {
   if (!scene) return;
 
   if (dirLight) {
@@ -1433,6 +1600,8 @@ function applyShadowSettings(enabled) {
       dirLight.shadow.camera.far = 200;
     }
   }
+
+  if (!updateMeshes) return;
 
   modelGroup.traverse(obj => {
     if (!obj) return;
@@ -1466,12 +1635,13 @@ function createRenderer(width, height, quality) {
 function applyRendererQuality(quality) {
   if (!renderer) return;
   const cfg = getQualityConfig(quality);
+  dynamicPixelRatio = null;
   renderer.setPixelRatio(cfg.pixelRatio);
   renderer.shadowMap.enabled = cfg.shadowsEnabled;
   if (cfg.shadowsEnabled) {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   }
-  applyShadowSettings(cfg.shadowsEnabled);
+  applyShadowSettings(cfg.shadowsEnabled, { updateMeshes: false });
 }
 
 function replaceRendererIfNeeded(quality) {
@@ -1626,8 +1796,8 @@ function updateFirstPersonMovement(frameMs) {
     props.firstPersonSpeed *
     (firstPersonKeys.ShiftLeft || firstPersonKeys.ShiftRight ? 2.2 : 1);
   const distance = moveSpeed * Math.max(frameMs / 16.7, 0.5);
-  const move = new THREE.Vector3();
-  const forward = new THREE.Vector3();
+  const move = firstPersonMoveVector.set(0, 0, 0);
+  const forward = firstPersonForwardVector;
   camera.getWorldDirection(forward);
   forward.y = 0;
   if (forward.lengthSq() === 0) {
@@ -1636,8 +1806,9 @@ function updateFirstPersonMovement(frameMs) {
     forward.normalize();
   }
 
-  const right = new THREE.Vector3()
-    .crossVectors(forward, camera.up)
+  const right = firstPersonRightVector
+    .copy(forward)
+    .cross(camera.up)
     .normalize()
     .multiplyScalar(-1);
 
@@ -1909,6 +2080,7 @@ function setMeshOpacityByUUID(uuid, opacity = 0.2) {
       obj.material = existing.original;
       disposeMaterialSafe(existing.override);
       meshOpacityOverrides.delete(obj.uuid);
+      noteUserInteraction();
     }
     return true;
   }
@@ -1939,6 +2111,7 @@ function setMeshOpacityByUUID(uuid, opacity = 0.2) {
 
   meshOpacityOverrides.set(obj.uuid, { original, override });
   obj.material = override;
+  noteUserInteraction();
   return true;
 }
 
@@ -1946,10 +2119,13 @@ function isVisibilityManagedObject(obj) {
   return Boolean(obj && !obj.userData?.isHelper && !obj.userData?.isMeasure);
 }
 
+function markPickTargetsDirty(options) {
+  measureTool?.markPickTargetsDirty?.();
+  objectPicker?.markPickTargetsDirty?.(options);
+}
+
 function markVisibilityStateDirty() {
   objectPicker?.markSceneTreeDirty?.();
-  measureTool?.refreshPickTargets?.();
-  objectPicker?.refreshPickTargets?.();
   noteUserInteraction();
 }
 
@@ -2209,6 +2385,71 @@ async function buildBvhForRoot(root, shouldCancel = () => false) {
   }
 }
 
+function cancelScheduledBvhBuild() {
+  bvhBuildRequestId += 1;
+  if (!bvhBuildIdleHandle) return;
+  if (
+    bvhBuildIdleType === "idle" &&
+    typeof window.cancelIdleCallback === "function"
+  ) {
+    window.cancelIdleCallback(bvhBuildIdleHandle);
+  } else {
+    clearTimeout(bvhBuildIdleHandle);
+  }
+  bvhBuildIdleHandle = 0;
+  bvhBuildIdleType = "";
+}
+
+function scheduleBvhBuildForCurrentModel(requestId) {
+  cancelScheduledBvhBuild();
+  if (!props.enableBvh) return;
+
+  const buildRequestId = bvhBuildRequestId;
+  const queueDelayMs = INITIAL_FPS_SAMPLE_QUALITIES.has(effectiveQuality.value)
+    ? INITIAL_FPS_SAMPLE_DURATION_MS + 750
+    : 250;
+  const runBuild = () => {
+    bvhBuildIdleHandle = 0;
+    bvhBuildIdleType = "";
+    if (isDestroying || requestId !== loadRequestId) return;
+
+    void buildBvhForRoot(
+      modelGroup,
+      () =>
+        isDestroying ||
+        requestId !== loadRequestId ||
+        buildRequestId !== bvhBuildRequestId
+    ).catch(error => {
+      // BVH 仅用于加速拾取/测量，失败时不应阻止模型显示。
+      console.warn("buildBvhForRoot failed, continue without BVH", error);
+    });
+  };
+
+  const queueIdleBuild = () => {
+    bvhBuildIdleHandle = 0;
+    bvhBuildIdleType = "";
+    if (
+      isDestroying ||
+      requestId !== loadRequestId ||
+      buildRequestId !== bvhBuildRequestId
+    ) {
+      return;
+    }
+
+    if (typeof window.requestIdleCallback === "function") {
+      bvhBuildIdleType = "idle";
+      bvhBuildIdleHandle = window.requestIdleCallback(runBuild, {
+        timeout: 1600
+      });
+      return;
+    }
+    runBuild();
+  };
+
+  bvhBuildIdleType = "timeout";
+  bvhBuildIdleHandle = window.setTimeout(queueIdleBuild, queueDelayMs);
+}
+
 function disposeBvhForRoot(root) {
   if (!root) return;
   root.traverse(obj => {
@@ -2218,8 +2459,41 @@ function disposeBvhForRoot(root) {
   });
 }
 
-function noteUserInteraction() {
+function noteUserInteraction(options = {}) {
   lastInteractionAt = performance.now();
+  if (
+    options.ensureLoop === false ||
+    renderPaused ||
+    isLoopRunning ||
+    document.hidden
+  ) {
+    return;
+  }
+  startLoop({ preserveInteractionTime: true });
+}
+
+function isFirstPersonMoving() {
+  return (
+    isFirstPerson.value &&
+    FIRST_PERSON_MOVE_KEYS.some(code => firstPersonKeys[code])
+  );
+}
+
+function isRealtimeRenderRequired() {
+  return Boolean(
+    initialFpsSample ||
+    isFirstPersonMoving() ||
+    clippingTool?.isInteractionActive?.() ||
+    clippingTool?.getAnimationState?.()?.playing
+  );
+}
+
+function shouldStopForDeepIdle(now) {
+  return (
+    !props.showStats &&
+    !isRealtimeRenderRequired() &&
+    now - lastInteractionAt > DEEP_IDLE_RENDER_STOP_MS
+  );
 }
 
 function cancelInitialFpsSample() {
@@ -2301,8 +2575,10 @@ function updateInitialFpsSample(now = performance.now()) {
 }
 
 function shouldThrottleFrame(now) {
+  if (isRealtimeRenderRequired()) return false;
   const idleMs = now - lastInteractionAt;
-  const targetFrameMs = idleMs > 1200 ? 1000 / 15 : 1000 / 60;
+  const targetFps = idleMs > 10000 ? 5 : idleMs > 1200 ? 15 : 60;
+  const targetFrameMs = 1000 / targetFps;
   return now - lastRenderAt < targetFrameMs;
 }
 
@@ -2368,13 +2644,16 @@ function updateDynamicPixelRatio(frameMs, now) {
   }
 }
 
-function startLoop() {
+function startLoop(options = {}) {
   if (renderPaused) return;
   if (isLoopRunning) return;
+  if (!renderer || !scene || !camera) return;
   isLoopRunning = true;
   lastFrameAt = 0;
   lastRenderAt = 0;
-  noteUserInteraction();
+  if (!options.preserveInteractionTime) {
+    lastInteractionAt = performance.now();
+  }
 
   const tick = () => {
     if (!isLoopRunning) return;
@@ -2386,15 +2665,15 @@ function startLoop() {
       return;
     }
 
-    const frameMs = lastFrameAt ? now - lastFrameAt : 16.7;
+    const frameDeltaMs = lastFrameAt ? now - lastFrameAt : 16.7;
     lastFrameAt = now;
     lastRenderAt = now;
-    updateAdaptiveInteractionByFrame(frameMs, now);
 
     perfMonitor?.begin();
+    const workStartAt = performance.now();
 
-    updateFirstPersonMovement(frameMs);
-    clippingTool?.updateAnimation?.(frameMs / 1000);
+    updateFirstPersonMovement(frameDeltaMs);
+    clippingTool?.updateAnimation?.(frameDeltaMs / 1000);
     controls?.update?.();
     updateFixedScreenSprites();
     renderer.render(scene, camera);
@@ -2402,8 +2681,15 @@ function startLoop() {
     // 更新测量标注
     measureTool?.update();
 
+    const workMs = performance.now() - workStartAt;
+    updateAdaptiveInteractionByFrame(workMs, now);
     perfMonitor?.end(renderer.info);
     updateInitialFpsSample(performance.now());
+
+    if (shouldStopForDeepIdle(performance.now())) {
+      stopLoop();
+      return;
+    }
 
     rafId = requestAnimationFrame(tick);
   };
@@ -2424,6 +2710,7 @@ function setRenderPaused(value) {
   renderPaused = Boolean(value);
   if (renderPaused) {
     cancelInitialFpsSample();
+    cancelScheduledBvhBuild();
     stopLoop();
     return true;
   }
@@ -2438,6 +2725,7 @@ function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
 
   const modelMap = new Map(models.map(item => [item.instanceId, item]));
   let changed = false;
+  let spatialChanged = false;
   modelGroup.children.forEach(group => {
     const item = modelMap.get(group.userData?.sceneModelInstanceId);
     if (!item) return;
@@ -2456,32 +2744,31 @@ function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
     const position = item.transform?.position || [0, 0, 0];
     const rotation = item.transform?.rotation || [0, 0, 0];
     const scale = item.transform?.scale || [1, 1, 1];
-    if (!group.position.equals(new THREE.Vector3().fromArray(position))) {
+    if (array3DiffersFromVector3(group.position, position, [0, 0, 0])) {
       group.position.fromArray(position);
       changed = true;
+      spatialChanged = true;
     }
-    if (
-      group.rotation.x !== rotation[0] ||
-      group.rotation.y !== rotation[1] ||
-      group.rotation.z !== rotation[2]
-    ) {
+    if (array3DiffersFromEuler(group.rotation, rotation, [0, 0, 0])) {
       group.rotation.set(...rotation);
       changed = true;
+      spatialChanged = true;
     }
-    if (!group.scale.equals(new THREE.Vector3().fromArray(scale))) {
+    if (array3DiffersFromVector3(group.scale, scale, [1, 1, 1])) {
       group.scale.fromArray(scale);
       changed = true;
+      spatialChanged = true;
     }
   });
 
   if (!changed) return false;
 
-  modelGroup.updateMatrixWorld(true);
-  lastBounds = computeBounds(modelGroup);
-  clippingTool?.setBounds?.(lastBounds?.box || null);
+  if (spatialChanged) {
+    modelGroup.updateMatrixWorld(true);
+    lastBounds = computeBounds(modelGroup);
+    clippingTool?.setBounds?.(lastBounds?.box || null);
+  }
   objectPicker?.markSceneTreeDirty?.();
-  measureTool?.refreshPickTargets?.();
-  objectPicker?.refreshPickTargets?.();
   noteUserInteraction();
   return true;
 }
@@ -2489,6 +2776,7 @@ function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
 async function loadModel() {
   const requestId = ++loadRequestId;
   cancelInitialFpsSample();
+  cancelScheduledBvhBuild();
   errorText.value = "";
   loadProgress.value = 0;
   loadingModelIndex.value = 0;
@@ -2584,24 +2872,11 @@ async function loadModel() {
       totalMeshCount += Number(stats?.meshCount || 0);
     }
 
-    if (props.enableBvh) {
-      try {
-        await buildBvhForRoot(
-          modelGroup,
-          () => isDestroying || requestId !== loadRequestId
-        );
-      } catch (error) {
-        // BVH 仅用于加速拾取/测量，失败时不应阻止模型渲染。
-        console.warn("buildBvhForRoot failed, continue without BVH", error);
-      }
-    }
-
     if (isDestroying || requestId !== loadRequestId) return;
 
     loadedSceneModelResourceSignature =
       getSceneModelResourceSignature(sceneModels);
-    measureTool?.refreshPickTargets?.();
-    objectPicker?.refreshPickTargets?.();
+    markPickTargetsDirty();
     captureOriginalMaterials(modelGroup);
     lastBounds = computeBounds(modelGroup);
     modelStats.value = {
@@ -2639,6 +2914,8 @@ async function loadModel() {
       models: loadedModels,
       stats: modelStats.value
     });
+    scheduleBvhBuildForCurrentModel(requestId);
+    noteUserInteraction();
   } catch (e) {
     if (requestId !== loadRequestId) return;
     const msg = e?.message || String(e);
@@ -2667,6 +2944,7 @@ async function loadModel() {
 function clearModel() {
   loadedSceneModelResourceSignature = "";
   cancelInitialFpsSample();
+  cancelScheduledBvhBuild();
   // 若处于 low 档贴图解绑状态，先恢复贴图，确保 dispose 能正确释放贴图资源
   restoreTexturesFromOriginalMaterials();
 
@@ -2768,6 +3046,7 @@ function fitToView() {
   controls.target.copy(center);
   updateCameraClipping(radius);
   controls.update();
+  noteUserInteraction();
 }
 
 function zoomBy(factor) {
@@ -2778,6 +3057,7 @@ function zoomBy(factor) {
   camera.position.copy(controls.target).add(dir);
   updateCameraClipping();
   controls.update();
+  noteUserInteraction();
 }
 
 // ============ 相机控制增强 ============
@@ -2792,6 +3072,7 @@ function toggleProjection() {
 
   controls.object = camera;
   controls.update();
+  noteUserInteraction();
 
   return isOrthographic.value;
 }
@@ -2824,6 +3105,7 @@ function animateCamera(targetPos, targetLookAt, duration = 400) {
   const startPos = camera.position.clone();
   const startTarget = controls.target.clone();
   const startTime = performance.now();
+  noteUserInteraction();
 
   const animate = () => {
     const elapsed = performance.now() - startTime;
@@ -2847,18 +3129,22 @@ function animateCamera(targetPos, targetLookAt, duration = 400) {
 
 function setClippingState(state) {
   clippingTool?.setState?.(state);
+  noteUserInteraction();
 }
 
 function resetClipping() {
   clippingTool?.reset?.();
+  noteUserInteraction();
 }
 
 function setClippingPosition(axis, value) {
   clippingTool?.setPlanePosition(axis, value);
+  noteUserInteraction();
 }
 
 function setClippingEditMode(mode) {
   clippingTool?.setEditMode?.(mode);
+  noteUserInteraction();
 }
 
 function getClippingState() {
@@ -2870,15 +3156,21 @@ function getClippingStats() {
 }
 
 function setClippingAnimationOptions(options = {}) {
-  return clippingTool?.setAnimationOptions?.(options) || null;
+  const state = clippingTool?.setAnimationOptions?.(options) || null;
+  noteUserInteraction();
+  return state;
 }
 
 function startClippingAnimation(options = {}) {
-  return clippingTool?.startAnimation?.(options) || null;
+  const state = clippingTool?.startAnimation?.(options) || null;
+  noteUserInteraction();
+  return state;
 }
 
 function stopClippingAnimation() {
-  return clippingTool?.stopAnimation?.() || false;
+  const stopped = clippingTool?.stopAnimation?.() || false;
+  noteUserInteraction();
+  return stopped;
 }
 
 function getClippingAnimationState() {
@@ -2889,6 +3181,7 @@ function getClippingAnimationState() {
 
 function clearMeasurements() {
   measureTool?.clearAll();
+  noteUserInteraction();
 }
 
 function getMeasurements() {
@@ -2897,14 +3190,19 @@ function getMeasurements() {
 
 function setMeasurementMode(mode) {
   measureTool?.setMode?.(mode);
+  noteUserInteraction();
 }
 
 function removeMeasurement(id) {
-  return measureTool?.removeMeasurement?.(id);
+  const removed = measureTool?.removeMeasurement?.(id);
+  if (removed) noteUserInteraction();
+  return removed;
 }
 
 function setMeasurementVisible(id, visible) {
-  return measureTool?.setMeasurementVisible?.(id, visible);
+  const changed = measureTool?.setMeasurementVisible?.(id, visible);
+  if (changed) noteUserInteraction();
+  return changed;
 }
 
 function exportMeasurements() {
@@ -2913,6 +3211,7 @@ function exportMeasurements() {
 
 function setMeasurements(records = []) {
   measureTool?.setResults?.(records);
+  noteUserInteraction();
 }
 
 function focusMeasurement(id) {
@@ -2950,6 +3249,7 @@ function selectByUUID(uuid, options = {}) {
     emit("object-select", props);
   }
   if (obj && props) {
+    noteUserInteraction();
     return true;
   }
   return false;
@@ -2972,6 +3272,7 @@ function pickObjectAtClientPoint(payload = {}, options = {}) {
 
 function clearSelection() {
   objectPicker?.clearSelection();
+  noteUserInteraction();
 }
 
 function getSceneTree() {
@@ -3145,6 +3446,13 @@ function handleResize() {
   const rect = rootRef.value.getBoundingClientRect();
   const width = Math.max(1, rect.width);
   const height = Math.max(1, rect.height);
+  renderer.getSize(rendererViewportSize);
+  if (
+    Math.round(rendererViewportSize.x) === Math.round(width) &&
+    Math.round(rendererViewportSize.y) === Math.round(height)
+  ) {
+    return;
+  }
 
   renderer.setSize(width, height);
 
@@ -3159,9 +3467,16 @@ function handleResize() {
   orthographicCamera.updateProjectionMatrix();
 
   measureTool?.resize(width, height);
-  renderSceneAnchors();
-  renderCameraAnchors();
-  setLinkedPoints(linkedPoints);
+  updateFixedScreenSprites();
+  noteUserInteraction();
+}
+
+function scheduleResize() {
+  if (resizeRafId) return;
+  resizeRafId = requestAnimationFrame(() => {
+    resizeRafId = 0;
+    handleResize();
+  });
 }
 
 function mountRenderer() {
@@ -3423,9 +3738,7 @@ function mountRenderer() {
   document.addEventListener("mousemove", onFirstPersonMouseMove);
   document.addEventListener("pointerlockchange", onPointerLockChange);
 
-  resizeObserver = new ResizeObserver(() => {
-    handleResize();
-  });
+  resizeObserver = new ResizeObserver(scheduleResize);
   resizeObserver.observe(rootRef.value);
 
   startLoop();
@@ -3466,14 +3779,16 @@ function applyQualitySettings(quality) {
   applyRendererQuality(q);
 
   clearQualitySideEffects();
-  applyMaterialQuality(q);
-  setMaterialsTransparent(modelGroup, props.transparent);
+  const cfg = getQualityConfig(q);
+  applyMaterialQuality(q, {
+    transparent: props.transparent,
+    shadowsEnabled: cfg.shadowsEnabled,
+    detachOriginalTextures: q === "low"
+  });
   clippingTool?.refreshMaterials?.();
 
   // low：对原始材质做贴图解绑（可逆），进一步降低 GPU 纹理压力
   if (q === "low") {
-    detachTexturesFromOriginalMaterials();
-
     // 极限省显存：直接释放贴图（不可逆，切回 medium/high 会触发重载恢复）
     if (props.extremeLowMemory) {
       disposeDetachedTexturesAndForget();
@@ -3484,11 +3799,13 @@ function applyQualitySettings(quality) {
 function setQuality(quality) {
   qualityOverride.value = normalizeQuality(quality);
   applyQualitySettings(effectiveQuality.value);
+  noteUserInteraction();
 }
 
 function setMaterialTheme(theme) {
   materialThemeOverride.value = normalizeMaterialTheme(theme);
   applyQualitySettings(effectiveQuality.value);
+  noteUserInteraction();
 }
 
 function destroy() {
@@ -3497,6 +3814,10 @@ function destroy() {
   stopLoop();
   resizeObserver?.disconnect?.();
   resizeObserver = null;
+  if (resizeRafId) {
+    cancelAnimationFrame(resizeRafId);
+    resizeRafId = 0;
+  }
 
   if (onVisibilityChange) {
     document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -3533,6 +3854,7 @@ function destroy() {
   pointerDown = null;
 
   clearModel();
+  fixedScreenSprites.clear();
 
   // 销毁工具
   perfMonitor?.dispose();
@@ -3645,6 +3967,7 @@ onMounted(() => {
   onVisibilityChange = () => {
     if (document.hidden) {
       pauseInitialFpsSample();
+      cancelScheduledBvhBuild();
       stopLoop();
     } else {
       startLoop();
