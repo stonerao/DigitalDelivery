@@ -160,6 +160,7 @@ const shortcutGroups = [
         <el-option label="高" value="high" />
         <el-option label="中" value="medium" />
         <el-option label="低" value="low" />
+        <el-option label="平面渲染" value="plane" />
       </el-select>
     </div>
 

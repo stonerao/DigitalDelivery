@@ -205,11 +205,31 @@ function exportData(kind, format) {
                   />
                 </div>
               </el-form-item>
-              <el-form-item label="标签大小" class="dd-style-field">
+              <el-form-item label="字体大小" class="dd-style-field">
                 <el-input-number
                   v-model="form.anchor.labelFontSize"
                   :min="10"
                   :max="72"
+                  :step="1"
+                  controls-position="right"
+                  class="dd-style-input"
+                />
+              </el-form-item>
+              <el-form-item label="标签宽度" class="dd-style-field">
+                <el-input-number
+                  v-model="form.anchor.labelWidth"
+                  :min="24"
+                  :max="240"
+                  :step="1"
+                  controls-position="right"
+                  class="dd-style-input"
+                />
+              </el-form-item>
+              <el-form-item label="标签高度" class="dd-style-field">
+                <el-input-number
+                  v-model="form.anchor.labelHeight"
+                  :min="24"
+                  :max="240"
                   :step="1"
                   controls-position="right"
                   class="dd-style-input"
@@ -306,12 +326,12 @@ function exportData(kind, format) {
           <div class="dd-style-card__section">
             <div class="dd-style-card__section-title">样式参数</div>
             <div class="dd-style-form-grid">
-              <el-form-item label="图标大小" class="dd-style-field">
+              <el-form-item label="图标宽度" class="dd-style-field">
                 <el-input-number
-                  v-model="form.camera.markerSize"
-                  :min="0.05"
-                  :max="6"
-                  :step="0.05"
+                  v-model="form.camera.iconWidth"
+                  :min="24"
+                  :max="240"
+                  :step="1"
                   controls-position="right"
                   class="dd-style-input"
                 />
@@ -330,7 +350,7 @@ function exportData(kind, format) {
                 <div class="dd-style-switch-block">
                   <el-switch v-model="form.camera.iconSizeAttenuation" />
                   <div class="dd-style-help">
-                    开启后在透视相机下按距离缩放，图标大小参数仍然生效。
+                    开启后在透视相机下按距离缩放；关闭时按图标宽度固定显示。
                   </div>
                 </div>
               </el-form-item>
@@ -350,11 +370,21 @@ function exportData(kind, format) {
                   />
                 </div>
               </el-form-item>
-              <el-form-item label="标签大小" class="dd-style-field">
+              <el-form-item label="字体大小" class="dd-style-field">
                 <el-input-number
                   v-model="form.camera.labelFontSize"
                   :min="10"
                   :max="72"
+                  :step="1"
+                  controls-position="right"
+                  class="dd-style-input"
+                />
+              </el-form-item>
+              <el-form-item label="标签高度" class="dd-style-field">
+                <el-input-number
+                  v-model="form.camera.labelHeight"
+                  :min="24"
+                  :max="240"
                   :step="1"
                   controls-position="right"
                   class="dd-style-input"

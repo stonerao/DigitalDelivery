@@ -176,6 +176,7 @@ import {
 } from "./services/projectPackageService";
 import { useViewerToolbarState } from "./services/useViewerToolbarState";
 import Viewer3DWorkspace from "./components/fullscreen/Viewer3DWorkspace.vue";
+import ViewerPlaneWorkspace from "./components/fullscreen/ViewerPlaneWorkspace.vue";
 import Viewer2DWorkspace from "./components/fullscreen/Viewer2DWorkspace.vue";
 import FilePreview from "@/views/handover/documents/components/FilePreview.vue";
 import SceneSettingsDialog from "./components/fullscreen/dialogs/SceneSettingsDialog.vue";
@@ -1174,11 +1175,13 @@ const viewerSceneModels = computed(() =>
 );
 
 function openModelPicker() {
+  if (guardPlaneUnsupported("添加或切换模型")) return;
   modelPickerSelection.value = [];
   modelPickerVisible.value = true;
 }
 
 async function confirmAddModels() {
+  if (guardPlaneUnsupported("添加或切换模型")) return;
   const ids = Array.from(new Set(modelPickerSelection.value.filter(Boolean)));
   if (!ids.length) {
     message("请先选择模型", { type: "warning" });
@@ -1207,6 +1210,7 @@ async function confirmAddModels() {
 }
 
 function removeSceneModel(item) {
+  if (guardPlaneUnsupported("移除模型")) return;
   if (!item?.instanceId) return;
   sceneModels.value = sceneModels.value.filter(
     entry => entry.instanceId !== item.instanceId
@@ -1218,6 +1222,16 @@ function removeSceneModel(item) {
   message(`已移除模型：${item.modelName || item.modelId}`, { type: "success" });
 }
 
+function selectSceneModelFromPanel(value) {
+  if (guardPlaneUnsupported("添加或切换模型")) return;
+  activeSceneModelId.value = value;
+}
+
+function refreshModelOptionsFromPanel() {
+  if (guardPlaneUnsupported("刷新模型列表")) return;
+  void loadAvailableModels(true);
+}
+
 const sceneManifest = computed(
   () => projectStore.projectPackage?.assets?.sceneManifest || {}
 );
@@ -1226,15 +1240,25 @@ const selectedLodId = ref("");
 const qualityModeOptions = [
   { label: "高", value: "high" },
   { label: "中", value: "medium" },
-  { label: "低", value: "low" }
+  { label: "低", value: "low" },
+  { label: "平面渲染", value: "plane" }
 ];
 
+const isPlaneRendering = computed(() => quality.value === "plane");
+const planeSnapshot = ref(null);
+const planeSnapshotLoading = ref(false);
+const planeObjectPositionMap = ref({});
+let planeSnapshotRequestId = 0;
+
 const viewerModelUrl = computed(() => {
-  const activeLod = (sceneManifest.value?.lodLevels || []).find(
-    item => item.id === selectedLodId.value
-  );
+  const activeLod = isPlaneRendering.value
+    ? null
+    : (sceneManifest.value?.lodLevels || []).find(
+        item => item.id === selectedLodId.value
+      );
   const qualityProfiles = sceneManifest.value?.qualityProfiles || {};
-  const qualityMappedUrl = qualityProfiles[quality.value];
+  const qualityProfileKey = isPlaneRendering.value ? "low" : quality.value;
+  const qualityMappedUrl = qualityProfiles[qualityProfileKey];
   return (
     String(activeLod?.modelUrl || "").trim() ||
     String(qualityMappedUrl || "").trim() ||
@@ -1374,6 +1398,7 @@ function stopClippingAnimation({ persist = true } = {}) {
 }
 
 function toggleClippingAnimation() {
+  if (guardPlaneUnsupported("剖切动画")) return;
   if (!enableClipping.value) {
     const nextState = ensureVisibleClippingState(runtimeClippingState.value);
     updateClippingState(nextState, { persist: false });
@@ -1828,6 +1853,91 @@ const renderableCameraAnchors = computed(() => {
     style: normalizeAnchorStyle(getAnchorStyleDefault("camera"), "camera-point")
   }));
 });
+
+const planeSnapshotSignature = computed(() =>
+  JSON.stringify({
+    modelUrl: viewerModelUrl.value,
+    models: viewerSceneModels.value.map(item => ({
+      id: item.modelId,
+      instanceId: item.instanceId,
+      visible: item.visible !== false,
+      transform: item.transform
+    })),
+    lod: selectedLodId.value,
+    materialTheme: materialTheme.value
+  })
+);
+
+function normalizeWorldVector(value) {
+  if (Array.isArray(value) && value.length >= 3) {
+    const next = value.slice(0, 3).map(Number);
+    return next.every(Number.isFinite) ? next : null;
+  }
+  if (value && typeof value.toArray === "function") {
+    return normalizeWorldVector(value.toArray());
+  }
+  return null;
+}
+
+function rebuildPlaneObjectPositionMap() {
+  const ids = new Set();
+  [...renderableAnchors.value, ...renderableCameraAnchors.value].forEach(
+    item => {
+      if (item?.objectUuid) ids.add(item.objectUuid);
+    }
+  );
+
+  const next = {};
+  ids.forEach(uuid => {
+    const position = normalizeWorldVector(
+      viewerAdapter.getObjectWorldPositionByUUID(uuid)
+    );
+    if (position) next[uuid] = position;
+  });
+  planeObjectPositionMap.value = next;
+}
+
+function guardPlaneUnsupported(action = "该操作") {
+  if (!isPlaneRendering.value) return false;
+  message(`平面渲染不支持${action}`, { type: "warning" });
+  return true;
+}
+
+function runWhenNotPlane(action, callback) {
+  if (guardPlaneUnsupported(action)) return false;
+  return callback?.();
+}
+
+async function refreshPlaneSnapshot({ force = false } = {}) {
+  if (!isPlaneRendering.value || !viewerAdapter.isReady()) return;
+  if (planeSnapshotLoading.value && !force) return;
+  const requestId = ++planeSnapshotRequestId;
+  planeSnapshotLoading.value = true;
+  try {
+    await nextTick();
+    viewerAdapter.setRenderPaused(false);
+    const snapshot = viewerAdapter.captureTopViewSnapshot({
+      maxWidth: 1600,
+      backgroundColor: "#eef2f6"
+    });
+    if (requestId !== planeSnapshotRequestId) return;
+    planeSnapshot.value = snapshot || null;
+    rebuildPlaneObjectPositionMap();
+  } catch (error) {
+    console.error("capture plane snapshot failed", error);
+    if (requestId === planeSnapshotRequestId) {
+      planeSnapshot.value = null;
+      message("生成平面底图失败", { type: "error" });
+    }
+  } finally {
+    if (requestId === planeSnapshotRequestId) {
+      planeSnapshotLoading.value = false;
+      if (isPlaneRendering.value) {
+        viewerAdapter.setRenderPaused(true);
+      }
+    }
+  }
+}
 
 const activeAnchorDetail = computed(() => {
   return (
@@ -2452,6 +2562,7 @@ function applyAssetGroupVisibility() {
 }
 
 function toggleAssetGroupVisibility({ id, visible }) {
+  if (guardPlaneUnsupported("按资产组筛选模型")) return;
   assetGroups.value = assetGroups.value.map(item =>
     item.id === id ? { ...item, visible } : item
   );
@@ -2465,6 +2576,7 @@ function toggleAssetGroupVisibility({ id, visible }) {
 }
 
 function focusSceneObjectSelection(objectUuid) {
+  if (isPlaneRendering.value) return false;
   if (!objectUuid) return false;
   viewerAdapter.selectObjectByUUID(objectUuid, { emitEvent: false });
   viewerAdapter.focusObjectByUUID(objectUuid);
@@ -2488,6 +2600,7 @@ function clearSceneObjectPanels() {
 }
 
 function applyLodLevel(lod) {
+  if (guardPlaneUnsupported("切换 LOD")) return;
   selectedLodId.value = lod?.id || "";
   message(
     selectedLodId.value
@@ -2498,6 +2611,7 @@ function applyLodLevel(lod) {
 }
 
 function clearLodOverride() {
+  if (guardPlaneUnsupported("切换 LOD")) return;
   selectedLodId.value = "";
   message("已恢复默认模型清单", { type: "success" });
 }
@@ -2612,6 +2726,10 @@ function stopPositionPicking({ restoreTool = true } = {}) {
 }
 
 function startPositionPicking() {
+  if (isPlaneRendering.value) {
+    message("平面渲染请在画布中右键添加点位或摄像头", { type: "info" });
+    return;
+  }
   if (!viewerAdapter.isReady()) {
     message("请先加载模型后再拾取位置", { type: "warning" });
     return;
@@ -2674,7 +2792,9 @@ function openEditAnchorDialog(item, kind = "anchor") {
 
 function selectAndEditSceneAnchor(item, kind = "anchor") {
   updateSceneAnchorSelection(item, kind);
-  focusSceneObjectSelection(item?.objectUuid);
+  if (!isPlaneRendering.value) {
+    focusSceneObjectSelection(item?.objectUuid);
+  }
   openEditAnchorDialog(item, kind);
 }
 
@@ -2791,6 +2911,7 @@ function removeSceneAnchor(item, kind = "anchor") {
 async function selectSceneAnchor(item, kind = "anchor") {
   if (!item) return;
   updateSceneAnchorSelection(item, kind);
+  if (isPlaneRendering.value) return;
   if (focusSceneObjectSelection(item.objectUuid)) {
     await selectTreeNodeByUUID(item.objectUuid, { openPanel: false });
   }
@@ -2800,14 +2921,18 @@ function openAnchorDetail(anchor) {
   updateSceneAnchorSelection(anchor, "anchor");
   clearSceneObjectPanels();
   anchorDetailVisible.value = true;
-  focusSceneObjectSelection(anchor.objectUuid);
+  if (!isPlaneRendering.value) {
+    focusSceneObjectSelection(anchor.objectUuid);
+  }
 }
 
 function openCameraVideo(anchor) {
   updateSceneAnchorSelection(anchor, "camera");
   clearSceneObjectPanels();
   runtimeStore.openVideoDialog(anchor);
-  focusSceneObjectSelection(anchor.objectUuid);
+  if (!isPlaneRendering.value) {
+    focusSceneObjectSelection(anchor.objectUuid);
+  }
 }
 
 function handleSceneAnchorClick(anchor) {
@@ -3185,8 +3310,23 @@ function clearRuntimeLogs() {
 }
 
 function onQualityChange(val) {
+  quality.value = val;
   runtimeStore.setQuality(val);
   viewerAdapter.setQuality(val);
+  if (val === "plane") {
+    if (roamingEnabled.value) {
+      viewerAdapter.toggleFirstPerson(false);
+      roamingEnabled.value = false;
+      runtimeStore.setRoamingEnabled(false);
+    }
+    stopClippingAnimation({ persist: false });
+    runtimeStore.setShowObjectPanel(false);
+    viewerAdapter.clearSelection();
+    onToolChange("rotate");
+    void refreshPlaneSnapshot({ force: true });
+  } else {
+    viewerAdapter.setRenderPaused(false);
+  }
 }
 
 function updateClippingState(
@@ -3297,6 +3437,7 @@ function applyPickModeClippingTarget(nextState) {
 }
 
 function toggleClipping() {
+  if (guardPlaneUnsupported("剖切")) return;
   if (enableClipping.value) {
     stopClippingAnimation({ persist: false });
   }
@@ -3315,11 +3456,13 @@ function toggleClipping() {
 }
 
 function onClippingStateChange(nextState) {
+  if (guardPlaneUnsupported("剖切")) return;
   stopClippingAnimation({ persist: false });
   updateClippingState(nextState);
 }
 
 function onClippingPresetChange(presetId) {
+  if (guardPlaneUnsupported("剖切")) return;
   stopClippingAnimation({ persist: false });
   const nextState = applyPickModeClippingTarget(
     applyClippingPreset(runtimeClippingState.value, presetId)
@@ -3332,6 +3475,7 @@ function onClippingPresetChange(presetId) {
 }
 
 function resetClipping() {
+  if (guardPlaneUnsupported("剖切")) return;
   stopClippingAnimation({ persist: false });
   const nextState = resetClippingState(runtimeClippingState.value);
   updateClippingState(nextState);
@@ -3340,6 +3484,7 @@ function resetClipping() {
 }
 
 async function locateDevice(item, withMessage = true) {
+  if (guardPlaneUnsupported("视角定位")) return;
   await locateSceneDevice({
     item,
     viewerAdapter,
@@ -3357,6 +3502,7 @@ async function locateSystem(
   nodeId = selectedSystemNodeId.value,
   withMessage = true
 ) {
+  if (guardPlaneUnsupported("视角定位")) return;
   await locateSceneSystem({
     nodeId,
     sceneDevices: sceneDevices.value,
@@ -3377,6 +3523,7 @@ async function locateSystem(
 }
 
 async function locateRegion(regionId, withMessage = true) {
+  if (guardPlaneUnsupported("视角定位")) return;
   await locateSceneRegion({
     regionId,
     systemTree: systemNodeTree.value,
@@ -3449,6 +3596,7 @@ async function locateModelInstance(instanceId, withMessage = true) {
 }
 
 async function locateSceneModel(item) {
+  if (guardPlaneUnsupported("模型定位")) return false;
   const modelId = typeof item === "string" ? item : item?.modelId;
   const instanceId =
     item?.instanceId ||
@@ -3462,6 +3610,7 @@ async function locateSceneModel(item) {
 }
 
 async function locateByKks(kks = selectedQuickKks.value) {
+  if (guardPlaneUnsupported("视角定位")) return;
   await locateSceneByKks({
     kks,
     sceneDevices: sceneDevices.value,
@@ -3474,6 +3623,7 @@ async function isolateDevice(
   item = selectedSceneDevice.value,
   withMessage = true
 ) {
+  if (guardPlaneUnsupported("模型隔离显示")) return;
   await isolateSceneDevice({
     item,
     viewerAdapter,
@@ -3526,7 +3676,10 @@ const canvasContextObjectInfo = computed(
   () => canvasContextToolbarPayload.value.objectInfo || null
 );
 const canvasContextToolbarHasObject = computed(() =>
-  Boolean(getCanvasContextObjectUuid(canvasContextObjectInfo.value))
+  Boolean(
+    !isPlaneRendering.value &&
+    getCanvasContextObjectUuid(canvasContextObjectInfo.value)
+  )
 );
 const canvasContextToolbarStyle = computed(() => {
   const viewportWidth =
@@ -3640,6 +3793,12 @@ function handleCanvasContextMenu(payload = {}) {
 }
 
 function selectCanvasContextObjectInfo(info, { notifyOnMiss = true } = {}) {
+  if (isPlaneRendering.value) {
+    if (notifyOnMiss) {
+      message("平面渲染不支持选择模型构件", { type: "warning" });
+    }
+    return false;
+  }
   const uuid = getCanvasContextObjectUuid(info);
   if (!uuid) {
     if (notifyOnMiss) {
@@ -4506,12 +4665,14 @@ function applyLayerVisibility(keys) {
 }
 
 function handleLayerTreeCheck() {
+  if (guardPlaneUnsupported("分层筛选模型")) return;
   const keys = layerTreeRef.value?.getCheckedKeys?.(true) || [];
   layerCheckedKeys.value = [...keys];
   applyLayerVisibility(layerCheckedKeys.value);
 }
 
 async function applyDisplayMode(mode, withMessage = true) {
+  if (guardPlaneUnsupported("模型显示模式切换")) return false;
   return await applySceneDisplayMode({
     mode,
     viewerAdapter,
@@ -4533,6 +4694,7 @@ async function applyDisplayMode(mode, withMessage = true) {
 }
 
 async function applySelectionDisplayAction() {
+  if (guardPlaneUnsupported("模型显示模式切换")) return false;
   if (selectedSceneDevice.value?.uuid) {
     return await applyDisplayMode("selection", true);
   }
@@ -4554,6 +4716,7 @@ async function applySelectionDisplayAction() {
 }
 
 async function applyModelDisplayAction() {
+  if (guardPlaneUnsupported("模型显示模式切换")) return false;
   const instanceId = resolveCurrentModelInstanceId();
   if (!instanceId) {
     message("请先选择一个模型或构件", { type: "warning" });
@@ -4583,6 +4746,7 @@ async function applyModelDisplayAction() {
 }
 
 async function applyTypeDisplayAction() {
+  if (guardPlaneUnsupported("模型显示模式切换")) return false;
   const type = getSelectedObjectType();
   if (!type) {
     message("请先选择一个构件", { type: "warning" });
@@ -4605,6 +4769,7 @@ async function applyTypeDisplayAction() {
 }
 
 function hideCurrentDisplayObject() {
+  if (guardPlaneUnsupported("隐藏模型构件")) return false;
   const uuids = getSelectedDisplayUuids();
   if (!uuids.length) {
     message("请先选择一个构件", { type: "warning" });
@@ -4617,12 +4782,14 @@ function hideCurrentDisplayObject() {
 }
 
 function clearHiddenDisplayObjects() {
+  if (guardPlaneUnsupported("恢复隐藏模型构件")) return false;
   viewerAdapter.clearHiddenUUIDs();
   message("已恢复隐藏构件", { type: "success" });
   return true;
 }
 
 async function applyDisplayAction(action) {
+  if (guardPlaneUnsupported("模型显示模式切换")) return false;
   if (!ensureDisplayActionReady()) return false;
 
   if (action === "all") {
@@ -4664,6 +4831,7 @@ async function applyDisplayAction(action) {
 
 async function onObjectSelect(info) {
   hideCanvasContextToolbar();
+  if (isPlaneRendering.value) return;
   if (
     positionPickingState.value.active &&
     Array.isArray(info?.hitPoint) &&
@@ -4828,6 +4996,7 @@ function handleStructureModelTypeFilterUpdate(value) {
 }
 
 async function handleStructureNodeClick(node) {
+  if (guardPlaneUnsupported("结构树选择和定位")) return;
   selectedTreeNode.value = node || null;
   if (!node?.uuid) return;
 
@@ -4848,6 +5017,7 @@ async function handleStructureNodeClick(node) {
 }
 
 function focusSelectedNode() {
+  if (guardPlaneUnsupported("视角定位")) return;
   if (!selectedTreeNode.value?.uuid) return;
   viewerAdapter.selectObjectByUUID(selectedTreeNode.value.uuid, {
     emitEvent: false
@@ -4856,6 +5026,7 @@ function focusSelectedNode() {
 }
 
 function makeSelectedMeshTransparent() {
+  if (guardPlaneUnsupported("构件透明化")) return;
   if (!selectedTreeNode.value?.isMesh) return;
   viewerAdapter.setMeshOpacityByUUID(
     selectedTreeNode.value.uuid,
@@ -4864,6 +5035,7 @@ function makeSelectedMeshTransparent() {
 }
 
 function restoreSelectedMeshOpacity() {
+  if (guardPlaneUnsupported("构件透明化")) return;
   if (!selectedTreeNode.value?.isMesh) return;
   viewerAdapter.setMeshOpacityByUUID(selectedTreeNode.value.uuid, 1);
 }
@@ -4873,6 +5045,7 @@ function handleMeshOpacityUpdate(value) {
 }
 
 async function isolateSelectedNode() {
+  if (guardPlaneUnsupported("隔离模型构件")) return;
   if (!selectedTreeNode.value?.uuid) {
     message("请先选择一个结构节点", { type: "warning" });
     return;
@@ -4890,6 +5063,7 @@ async function isolateSelectedNode() {
 }
 
 async function hideSelectedTreeNode() {
+  if (guardPlaneUnsupported("隐藏模型构件")) return;
   if (!selectedTreeNode.value?.uuid) {
     message("请先选择一个结构节点", { type: "warning" });
     return;
@@ -4903,6 +5077,7 @@ async function hideSelectedTreeNode() {
 }
 
 async function restoreHiddenTreeNodes() {
+  if (guardPlaneUnsupported("恢复隐藏模型构件")) return;
   viewerAdapter.clearHiddenUUIDs();
   await nextTick();
   refreshSceneTree();
@@ -4910,6 +5085,7 @@ async function restoreHiddenTreeNodes() {
 }
 
 async function showAllObjects() {
+  if (guardPlaneUnsupported("模型显示模式切换")) return;
   viewerAdapter.clearHiddenUUIDs();
   viewerAdapter.clearIsolation();
   viewerAdapter.filterVisibleUUIDs(null);
@@ -4941,6 +5117,9 @@ function handleViewerLoaded() {
     clippingAnimationAxis: clippingAnimationAxis.value,
     syncRuntimeServices
   });
+  if (isPlaneRendering.value) {
+    void refreshPlaneSnapshot({ force: true });
+  }
 }
 
 function handleViewerClippingChange(payload) {
@@ -4984,6 +5163,23 @@ function handleFullscreenShortcut(event) {
   if (key === "escape" && positionPickingState.value.active) {
     cancelPositionPicking();
     return;
+  }
+
+  if (isPlaneRendering.value) {
+    const blocked =
+      key === "home" ||
+      key === "r" ||
+      key === "k" ||
+      key === "t" ||
+      key === "h" ||
+      Boolean(measurementShortcutMap[key]) ||
+      Boolean(clippingShortcutMap[key]) ||
+      Boolean(displayModeShortcutMap[key]);
+    if (blocked) {
+      event.preventDefault();
+      guardPlaneUnsupported("三维视角和模型选择操作");
+      return;
+    }
   }
 
   if (roamingEnabled.value && key !== "r") return;
@@ -5245,6 +5441,32 @@ watch(
 );
 
 watch(
+  () => isPlaneRendering.value,
+  value => {
+    hideCanvasContextToolbar();
+    if (value) {
+      runtimeStore.setShowObjectPanel(false);
+      viewerAdapter.clearSelection();
+      void refreshPlaneSnapshot({ force: true });
+      return;
+    }
+    planeSnapshotRequestId += 1;
+    planeSnapshotLoading.value = false;
+    viewerAdapter.setRenderPaused(false);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => planeSnapshotSignature.value,
+  () => {
+    if (!isPlaneRendering.value) return;
+    planeSnapshot.value = null;
+    void refreshPlaneSnapshot({ force: true });
+  }
+);
+
+watch(
   () => materialTheme.value,
   value => {
     syncViewerMaterialTheme({
@@ -5270,6 +5492,14 @@ watch(
     syncSceneAnchorsOnWatcher({
       syncSceneAnchors
     });
+  },
+  { deep: true }
+);
+
+watch(
+  () => [renderableAnchors.value, renderableCameraAnchors.value],
+  () => {
+    if (isPlaneRendering.value) rebuildPlaneObjectPositionMap();
   },
   { deep: true }
 );
@@ -5370,11 +5600,11 @@ onBeforeUnmount(() => {
           :model-name="modelName"
           :viewer-scene-models="viewerSceneModels"
           :transparent="transparent"
-          :quality="quality"
-          :interaction-mode="interactionMode"
+          :quality="isPlaneRendering ? 'low' : quality"
+          :interaction-mode="isPlaneRendering ? 'pan' : interactionMode"
           :ifc-wasm-path="ifcWasmPath"
-          :show-stats="showStats"
-          :enable-clipping="enableClipping"
+          :show-stats="showStats && !isPlaneRendering"
+          :enable-clipping="enableClipping && !isPlaneRendering"
           :tool-options="toolOptions"
           :active-tool="activeTool"
           :roaming-enabled="roamingEnabled"
@@ -5418,20 +5648,26 @@ onBeforeUnmount(() => {
           @clipping-change="handleViewerClippingChange"
           @update:active-tool="activeTool = $event"
           @update:measurement-mode="setMeasurementMode"
-          @tool-change="onToolChange"
-          @zoom-in="zoomIn"
-          @zoom-out="zoomOut"
-          @reset-view="resetView"
-          @toggle-roaming="toggleRoaming"
-          @toggle-transparent="toggleTransparent"
-          @toggle-projection="toggleProjection"
+          @tool-change="
+            value => runWhenNotPlane('三维工具切换', () => onToolChange(value))
+          "
+          @zoom-in="runWhenNotPlane('三维缩放', zoomIn)"
+          @zoom-out="runWhenNotPlane('三维缩放', zoomOut)"
+          @reset-view="runWhenNotPlane('三维视角重置', resetView)"
+          @toggle-roaming="runWhenNotPlane('漫游', toggleRoaming)"
+          @toggle-transparent="runWhenNotPlane('模型透明化', toggleTransparent)"
+          @toggle-projection="runWhenNotPlane('三维投影切换', toggleProjection)"
           @toggle-clipping="toggleClipping"
-          @take-screenshot="takeScreenshot"
-          @save-bookmark="saveBookmark"
-          @apply-bookmark="applyBookmark"
+          @take-screenshot="runWhenNotPlane('三维截图', takeScreenshot)"
+          @save-bookmark="runWhenNotPlane('三维视角书签', saveBookmark)"
+          @apply-bookmark="
+            value => runWhenNotPlane('三维视角书签', () => applyBookmark(value))
+          "
           @clear-measurements="clearMeasurements"
           @export-measurements="exportMeasurements"
-          @set-preset-view="setPresetView"
+          @set-preset-view="
+            value => runWhenNotPlane('三维视角切换', () => setPresetView(value))
+          "
           @set-material-theme="setMaterialTheme"
           @apply-display-action="applyDisplayAction"
           @update:clipping-state="onClippingStateChange"
@@ -5442,6 +5678,22 @@ onBeforeUnmount(() => {
           @reset-clipping="resetClipping"
           @close-object-panel="closeObjectPanel"
           @update:point-markers-visible="pointMarkersVisible = $event"
+        />
+
+        <ViewerPlaneWorkspace
+          v-if="isPlaneRendering"
+          :snapshot="planeSnapshot"
+          :loading="planeSnapshotLoading"
+          :anchors="renderableAnchors"
+          :camera-anchors="renderableCameraAnchors"
+          :anchor-markers-visible="anchorMarkersVisible"
+          :camera-markers-visible="cameraMarkersVisible"
+          :selected-anchor-id="selectedAnchorId"
+          :selected-camera-id="selectedCameraId"
+          :object-position-map="planeObjectPositionMap"
+          @canvas-contextmenu="handleCanvasContextMenu"
+          @scene-anchor-click="handleSceneAnchorClick"
+          @refresh-snapshot="refreshPlaneSnapshot({ force: true })"
         />
 
         <Viewer2DWorkspace
@@ -5546,12 +5798,12 @@ onBeforeUnmount(() => {
           @clear-records="clearMeasurements"
           @export-records="exportMeasurements"
           @add-model="openModelPicker"
-          @select-model="activeSceneModelId = $event"
+          @select-model="selectSceneModelFromPanel"
           @locate-model="locateSceneModel"
           @remove-model="removeSceneModel"
-          @refresh-model-options="loadAvailableModels(true)"
+          @refresh-model-options="refreshModelOptionsFromPanel"
           @toggle-group="toggleAssetGroupVisibility"
-          @update:quality="quality = $event"
+          @update:quality="onQualityChange"
           @update:material-theme="setMaterialTheme"
           @apply-lod="applyLodLevel"
           @clear-lod="clearLodOverride"

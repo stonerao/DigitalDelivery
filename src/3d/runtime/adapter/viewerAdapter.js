@@ -97,8 +97,11 @@ export function createViewerAdapter() {
     setLinkedPointsVisible: visible =>
       invoke("setLinkedPointsVisible", visible),
     captureScreenshot: options => invoke("captureScreenshot", options),
+    captureTopViewSnapshot: options =>
+      invoke("captureTopViewSnapshot", options),
     downloadScreenshot: (filename, options) =>
       invoke("downloadScreenshot", filename, options),
+    setRenderPaused: value => invoke("setRenderPaused", value),
     addBookmark: name => invoke("addBookmark", name),
     getBookmarks: () => invoke("getBookmarks"),
     applyBookmark: bookmark => invoke("applyBookmark", bookmark),

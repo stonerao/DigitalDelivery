@@ -66,6 +66,7 @@ const props = defineProps({
 });
 
 function normalizeQuality(q) {
+  if (q === "plane") return "low";
   if (q === "low" || q === "medium" || q === "high") return q;
   return "high";
 }
@@ -593,6 +594,7 @@ let resizeObserver;
 let canvasEl;
 let rafId = 0;
 let isLoopRunning = false;
+let renderPaused = false;
 let onVisibilityChange;
 let loadRequestId = 0;
 let adaptiveInteractionLevel = "normal";
@@ -677,6 +679,20 @@ let ambientLight;
 let rendererAntialias = true;
 
 const canRender = computed(() => Boolean(rootRef.value));
+const DEFAULT_SCREEN_LABEL_SIZE = 50;
+const DEFAULT_CAMERA_ICON_WIDTH = 60;
+const MIN_SCREEN_LABEL_SIZE = 24;
+const MAX_SCREEN_LABEL_SIZE = 240;
+
+function normalizeScreenLabelSize(value, fallback = DEFAULT_SCREEN_LABEL_SIZE) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return fallback;
+  return THREE.MathUtils.clamp(
+    numberValue,
+    MIN_SCREEN_LABEL_SIZE,
+    MAX_SCREEN_LABEL_SIZE
+  );
+}
 
 function getViewportAdaptiveScale() {
   const rect = rootRef.value?.getBoundingClientRect?.();
@@ -684,6 +700,81 @@ function getViewportAdaptiveScale() {
   const height = Math.max(1, rect?.height || 1080);
   const shortEdge = Math.min(width, height);
   return THREE.MathUtils.clamp(shortEdge / 1080, 0.72, 1.18);
+}
+
+function getFixedScreenSpriteScale(widthPx, heightPx) {
+  const rect = rootRef.value?.getBoundingClientRect?.();
+  const viewportWidth = Math.max(
+    1,
+    rect?.width || (typeof window !== "undefined" ? window.innerWidth : 1920)
+  );
+  const viewportHeight = Math.max(
+    1,
+    rect?.height || (typeof window !== "undefined" ? window.innerHeight : 1080)
+  );
+  const projection = camera?.projectionMatrix?.elements || [];
+  const projectionX = Math.max(0.0001, Math.abs(Number(projection[0]) || 1));
+  const projectionY = Math.max(0.0001, Math.abs(Number(projection[5]) || 1));
+  return {
+    x: (normalizeScreenLabelSize(widthPx) * 2) / (viewportWidth * projectionX),
+    y: (normalizeScreenLabelSize(heightPx) * 2) / (viewportHeight * projectionY)
+  };
+}
+
+function getImageAspect(image, fallback = 1) {
+  const width = Number(image?.width || image?.naturalWidth || 0);
+  const height = Number(image?.height || image?.naturalHeight || 0);
+  return Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0
+    ? width / height
+    : fallback;
+}
+
+function resolveFixedScreenSize({
+  width,
+  height,
+  aspect = 1,
+  fallbackWidth = DEFAULT_SCREEN_LABEL_SIZE,
+  fallbackHeight = DEFAULT_SCREEN_LABEL_SIZE
+} = {}) {
+  const rawWidth = Number(width);
+  const rawHeight = Number(height);
+  const hasWidth = Number.isFinite(rawWidth) && rawWidth > 0;
+  const hasHeight = Number.isFinite(rawHeight) && rawHeight > 0;
+  const safeAspect =
+    Number.isFinite(Number(aspect)) && Number(aspect) > 0 ? Number(aspect) : 1;
+  const resolvedHeight = normalizeScreenLabelSize(
+    hasHeight ? rawHeight : hasWidth ? rawWidth / safeAspect : fallbackHeight,
+    fallbackHeight
+  );
+  const resolvedWidth = normalizeScreenLabelSize(
+    hasWidth ? rawWidth : resolvedHeight * safeAspect,
+    fallbackWidth
+  );
+
+  return {
+    width: resolvedWidth,
+    height: resolvedHeight
+  };
+}
+
+function applyFixedScreenSpriteScale(sprite) {
+  const fixedSize = sprite?.userData?.fixedScreenSize;
+  if (!fixedSize) return;
+  const scale = getFixedScreenSpriteScale(fixedSize.width, fixedSize.height);
+  sprite.scale.set(scale.x, scale.y, sprite.scale.z || 1);
+}
+
+function updateFixedScreenSprites() {
+  [linkedPointGroup, anchorGroup, cameraAnchorGroup].forEach(group => {
+    group.traverse(obj => {
+      if (obj?.isSprite && obj.userData?.fixedScreenSize) {
+        applyFixedScreenSpriteScale(obj);
+      }
+    });
+  });
 }
 
 function createScene() {
@@ -750,6 +841,22 @@ function wrapSpriteText(ctx, text, maxWidth) {
   return lines.length ? lines : ["-"];
 }
 
+function truncateCanvasText(ctx, text, maxWidth) {
+  const content = String(text || "").trim();
+  if (!content || ctx.measureText(content).width <= maxWidth) return content;
+
+  const ellipsis = "...";
+  let next = "";
+  for (const char of Array.from(content)) {
+    const candidate = `${next}${char}`;
+    if (ctx.measureText(`${candidate}${ellipsis}`).width > maxWidth) {
+      break;
+    }
+    next = candidate;
+  }
+  return `${next || content.slice(0, 1)}${ellipsis}`;
+}
+
 function createBadgeSprite(text, color, options = {}) {
   const fontSize = options.fontSize || 24;
   const fontWeight = options.fontWeight || "bold";
@@ -757,15 +864,32 @@ function createBadgeSprite(text, color, options = {}) {
   const paddingX = options.paddingX || 22;
   const paddingY = options.paddingY || 16;
   const lineHeight = options.lineHeight || Math.round(fontSize * 1.35);
-  const minWidth = options.minWidth || 180;
-  const maxWidth = options.maxWidth || 300;
+  const fixedWidth =
+    Number.isFinite(Number(options.width)) && Number(options.width) > 0
+      ? Number(options.width)
+      : null;
+  const fixedHeight =
+    Number.isFinite(Number(options.height)) && Number(options.height) > 0
+      ? Number(options.height)
+      : null;
+  const minWidth = fixedWidth || options.minWidth || 180;
+  const maxWidth = fixedWidth || options.maxWidth || 300;
   const canvas = document.createElement("canvas");
   canvas.width = maxWidth;
   canvas.height = 256;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-  const lines = wrapSpriteText(ctx, text, maxWidth - paddingX * 2);
+  let lines = wrapSpriteText(ctx, text, maxWidth - paddingX * 2);
+  const maxLines = Math.max(0, Number(options.maxLines) || 0);
+  if (maxLines && lines.length > maxLines) {
+    lines = lines.slice(0, maxLines);
+    lines[maxLines - 1] = truncateCanvasText(
+      ctx,
+      lines[maxLines - 1],
+      maxWidth - paddingX * 2
+    );
+  }
   const measuredWidth = lines.reduce(
     (width, line) => Math.max(width, ctx.measureText(line).width),
     0
@@ -773,9 +897,14 @@ function createBadgeSprite(text, color, options = {}) {
   canvas.width = Math.ceil(
     Math.min(maxWidth, Math.max(minWidth, measuredWidth + paddingX * 2))
   );
-  canvas.height = Math.ceil(
-    Math.max(options.minHeight || 76, lines.length * lineHeight + paddingY * 2)
-  );
+  canvas.height =
+    fixedHeight ||
+    Math.ceil(
+      Math.max(
+        options.minHeight || 76,
+        lines.length * lineHeight + paddingY * 2
+      )
+    );
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -823,11 +952,25 @@ function createBadgeSprite(text, color, options = {}) {
   });
   material.userData.ownsTexture = true;
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(
-    (options.scaleX || canvas.width / 120) * viewportScale,
-    (options.scaleY || canvas.height / 120) * viewportScale,
-    options.scaleZ || 1
-  );
+  if (
+    options.sizeAttenuation === false &&
+    (options.screenWidth || options.screenHeight)
+  ) {
+    sprite.userData.fixedScreenSize = resolveFixedScreenSize({
+      width: options.screenWidth,
+      height: options.screenHeight,
+      aspect: getImageAspect(canvas),
+      fallbackWidth: DEFAULT_SCREEN_LABEL_SIZE,
+      fallbackHeight: DEFAULT_SCREEN_LABEL_SIZE
+    });
+    applyFixedScreenSpriteScale(sprite);
+  } else {
+    sprite.scale.set(
+      (options.scaleX || canvas.width / 120) * viewportScale,
+      (options.scaleY || canvas.height / 120) * viewportScale,
+      options.scaleZ || 1
+    );
+  }
   if (options.center) {
     sprite.center.set(options.center[0], options.center[1]);
   }
@@ -836,7 +979,19 @@ function createBadgeSprite(text, color, options = {}) {
 }
 
 function createPointLabelSprite(text, status) {
-  return createBadgeSprite(text, getPointStatusColor(status));
+  return createBadgeSprite(text, getPointStatusColor(status), {
+    width: 128,
+    height: 128,
+    paddingX: 10,
+    paddingY: 10,
+    borderWidth: 3,
+    fontSize: 26,
+    lineHeight: 32,
+    maxLines: 2,
+    sizeAttenuation: false,
+    screenWidth: DEFAULT_SCREEN_LABEL_SIZE,
+    screenHeight: DEFAULT_SCREEN_LABEL_SIZE
+  });
 }
 
 function createImageSprite(texture, options = {}) {
@@ -854,11 +1009,22 @@ function createImageSprite(texture, options = {}) {
   });
   material.userData.ownsTexture = Boolean(options.ownsTexture);
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(
-    (options.scaleX || 0.5) * viewportScale * attenuationBoost,
-    (options.scaleY || 0.5) * viewportScale * attenuationBoost,
-    options.scaleZ || 1
-  );
+  if (!useSizeAttenuation && (options.screenWidth || options.screenHeight)) {
+    sprite.userData.fixedScreenSize = resolveFixedScreenSize({
+      width: options.screenWidth,
+      height: options.screenHeight,
+      aspect: getImageAspect(texture.image),
+      fallbackWidth: options.screenWidth || DEFAULT_CAMERA_ICON_WIDTH,
+      fallbackHeight: options.screenHeight || DEFAULT_CAMERA_ICON_WIDTH
+    });
+    applyFixedScreenSpriteScale(sprite);
+  } else {
+    sprite.scale.set(
+      (options.scaleX || 0.5) * viewportScale * attenuationBoost,
+      (options.scaleY || 0.5) * viewportScale * attenuationBoost,
+      options.scaleZ || 1
+    );
+  }
   if (options.center) {
     sprite.center.set(options.center[0], options.center[1]);
   }
@@ -915,6 +1081,12 @@ function getAnchorRenderStyle(anchor, isCamera = false) {
     labelScaleX: (isCamera ? 2.4 : 2) * labelScaleBase,
     labelScaleY: (isCamera ? 0.63 : 0.72) * Math.sqrt(labelScaleBase),
     labelFontSize,
+    iconWidth: normalizeScreenLabelSize(
+      style.iconWidth,
+      DEFAULT_CAMERA_ICON_WIDTH
+    ),
+    labelWidth: isCamera ? null : normalizeScreenLabelSize(style.labelWidth),
+    labelHeight: normalizeScreenLabelSize(style.labelHeight),
     labelOffsetY:
       Number.isFinite(Number(style.labelOffsetY)) &&
       Number(style.labelOffsetY) > 0
@@ -923,7 +1095,7 @@ function getAnchorRenderStyle(anchor, isCamera = false) {
           ? 0.52
           : 0.42,
     iconSizeAttenuation: Boolean(style.iconSizeAttenuation),
-    showLabel: style.showLabel !== false,
+    showLabel: isCamera ? style.showLabel === true : style.showLabel !== false,
     markerColor: resolveAnchorColor(style.color, fallbackColor),
     labelColor: style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff")
   };
@@ -1014,6 +1186,7 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
       scaleY: renderStyle.markerSize,
       color: renderStyle.markerColor,
       sizeAttenuation: renderStyle.iconSizeAttenuation,
+      screenWidth: renderStyle.iconWidth,
       center: [0.5, 0.0]
     });
     if (cameraSprite) {
@@ -1040,28 +1213,39 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
       renderStyle.markerColor,
       isCamera
         ? {
-            minWidth: 220,
+            minWidth: 160,
             maxWidth: 360,
-            minHeight: 55,
+            height: 128,
+            paddingX: 10,
+            paddingY: 10,
             backgroundColor: "rgba(18, 38, 84, 0.82)",
             strokeColor: "#69b7ff",
             textColor: renderStyle.labelColor,
             borderWidth: 3,
             fontSize: renderStyle.labelFontSize,
+            lineHeight: Math.round(renderStyle.labelFontSize * 1.25),
+            maxLines: 2,
             sizeAttenuation: false,
+            screenHeight: renderStyle.labelHeight,
             center: [0.5, 0],
             scaleX: renderStyle.labelScaleX,
             scaleY: renderStyle.labelScaleY
           }
         : {
-            width: 280,
-            height: 96,
+            width: 128,
+            height: 128,
+            paddingX: 10,
+            paddingY: 10,
             backgroundColor: "rgba(15, 23, 42, 0.82)",
             strokeColor: undefined,
             textColor: renderStyle.labelColor,
-            borderWidth: 4,
+            borderWidth: 3,
             fontSize: renderStyle.labelFontSize,
+            lineHeight: Math.round(renderStyle.labelFontSize * 1.25),
+            maxLines: 2,
             sizeAttenuation: false,
+            screenWidth: renderStyle.labelWidth,
+            screenHeight: renderStyle.labelHeight,
             scaleX: renderStyle.labelScaleX,
             scaleY: renderStyle.labelScaleY
           }
@@ -2101,6 +2285,7 @@ function updateDynamicPixelRatio(frameMs, now) {
 }
 
 function startLoop() {
+  if (renderPaused) return;
   if (isLoopRunning) return;
   isLoopRunning = true;
   lastFrameAt = 0;
@@ -2127,6 +2312,7 @@ function startLoop() {
     updateFirstPersonMovement(frameMs);
     clippingTool?.updateAnimation?.(frameMs / 1000);
     controls?.update?.();
+    updateFixedScreenSprites();
     renderer.render(scene, camera);
 
     // 更新测量标注
@@ -2147,6 +2333,16 @@ function stopLoop() {
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
+}
+
+function setRenderPaused(value) {
+  renderPaused = Boolean(value);
+  if (renderPaused) {
+    stopLoop();
+    return true;
+  }
+  startLoop();
+  return false;
 }
 
 function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
@@ -2726,6 +2922,129 @@ function applyBookmark(bookmark) {
   controls.update();
 }
 
+function captureTopViewSnapshot(options = {}) {
+  if (!renderer || !scene || !modelGroup.children.length) return null;
+
+  modelGroup.updateMatrixWorld(true);
+  const bounds = computeBounds(modelGroup) || lastBounds;
+  if (!bounds?.box || bounds.box.isEmpty()) return null;
+
+  const rect = rootRef.value?.getBoundingClientRect?.();
+  const viewportWidth = Math.max(1, Math.round(rect?.width || 1280));
+  const viewportHeight = Math.max(1, Math.round(rect?.height || 720));
+  const maxWidth = Math.max(320, Number(options.maxWidth) || 1600);
+  const width = Math.min(viewportWidth, maxWidth);
+  const height = Math.max(
+    1,
+    Math.round(width / Math.max(viewportWidth / viewportHeight, 0.1))
+  );
+  const aspect = width / height;
+  const padding = Math.max(1, Number(options.padding) || 1.08);
+  const { size, center, box } = bounds;
+  const halfModelWidth = Math.max(size.x * 0.5 * padding, 0.5);
+  const halfModelDepth = Math.max(size.z * 0.5 * padding, 0.5);
+  let halfWidth = halfModelWidth;
+  let halfDepth = halfModelDepth;
+
+  if (halfWidth / halfDepth < aspect) {
+    halfWidth = halfDepth * aspect;
+  } else {
+    halfDepth = halfWidth / aspect;
+  }
+
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  const snapshotCamera = new THREE.OrthographicCamera(
+    -halfWidth,
+    halfWidth,
+    halfDepth,
+    -halfDepth,
+    0.1,
+    Math.max(maxDim * 10, 1000)
+  );
+  snapshotCamera.position.set(center.x, box.max.y + maxDim * 2, center.z);
+  snapshotCamera.up.set(0, 0, -1);
+  snapshotCamera.lookAt(center.x, center.y, center.z);
+  snapshotCamera.updateProjectionMatrix();
+
+  const originalTarget = renderer.getRenderTarget();
+  const originalBackground = scene.background;
+  const originalClearColor = new THREE.Color();
+  renderer.getClearColor(originalClearColor);
+  const originalClearAlpha = renderer.getClearAlpha();
+  const hiddenHelpers = [];
+
+  scene.traverse(obj => {
+    if (!obj?.userData?.isHelper || !obj.visible) return;
+    hiddenHelpers.push(obj);
+    obj.visible = false;
+  });
+
+  const target = new THREE.WebGLRenderTarget(width, height, {
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: true,
+    stencilBuffer: false
+  });
+
+  try {
+    if (options.backgroundColor) {
+      scene.background = new THREE.Color(options.backgroundColor);
+      renderer.setClearColor(scene.background, 1);
+    }
+    renderer.setRenderTarget(target);
+    renderer.clear(true, true, true);
+    renderer.render(scene, snapshotCamera);
+
+    const pixels = new Uint8Array(width * height * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    const imageData = ctx.createImageData(width, height);
+
+    for (let y = 0; y < height; y += 1) {
+      const srcY = height - 1 - y;
+      const srcOffset = srcY * width * 4;
+      const dstOffset = y * width * 4;
+      imageData.data.set(
+        pixels.subarray(srcOffset, srcOffset + width * 4),
+        dstOffset
+      );
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return {
+      imageUrl: canvas.toDataURL("image/png", 0.92),
+      width,
+      height,
+      viewBounds: {
+        minX: center.x - halfWidth,
+        maxX: center.x + halfWidth,
+        minZ: center.z - halfDepth,
+        maxZ: center.z + halfDepth,
+        y: box.max.y
+      },
+      modelBounds: {
+        min: box.min.toArray(),
+        max: box.max.toArray(),
+        center: center.toArray(),
+        size: size.toArray()
+      }
+    };
+  } finally {
+    target.dispose();
+    hiddenHelpers.forEach(obj => {
+      obj.visible = true;
+    });
+    scene.background = originalBackground;
+    renderer.setClearColor(originalClearColor, originalClearAlpha);
+    renderer.setRenderTarget(originalTarget);
+    renderer.render(scene, camera);
+  }
+}
+
 // ============ 生命周期 ============
 
 function handleResize() {
@@ -3207,7 +3526,9 @@ defineExpose({
   clearHiddenUUIDs,
   // 截图
   captureScreenshot,
+  captureTopViewSnapshot,
   downloadScreenshot,
+  setRenderPaused,
   setAnchors,
   clearAnchors,
   setAnchorsVisible,

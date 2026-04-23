@@ -59,6 +59,11 @@ function normalizePositiveNumber(value, fallback) {
   return Number.isFinite(num) && num > 0 ? num : fallback;
 }
 
+function normalizeScreenSize(value, fallback = 50) {
+  const num = normalizePositiveNumber(value, fallback);
+  return Math.min(240, Math.max(24, num));
+}
+
 export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
   const isCamera = type === "camera-point";
   return {
@@ -67,12 +72,16 @@ export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
       isCamera ? 0.42 : 0.09
     ),
     labelFontSize: normalizePositiveNumber(style.labelFontSize, 24),
+    ...(isCamera
+      ? { iconWidth: normalizeScreenSize(style.iconWidth, 60) }
+      : { labelWidth: normalizeScreenSize(style.labelWidth) }),
+    labelHeight: normalizeScreenSize(style.labelHeight),
     labelOffsetY: normalizePositiveNumber(
       style.labelOffsetY,
       isCamera ? 0.52 : 0.42
     ),
     iconSizeAttenuation: Boolean(style.iconSizeAttenuation),
-    showLabel: style.showLabel !== false,
+    showLabel: isCamera ? style.showLabel === true : style.showLabel !== false,
     color: asText(style.color || (isCamera ? "#0f766e" : "")),
     labelColor: asText(style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff"))
   };

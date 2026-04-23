@@ -1,5 +1,8 @@
 function normalizeRuntimeQuality(value) {
-  return value === "low" || value === "medium" || value === "high"
+  return value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "plane"
     ? value
     : "high";
 }

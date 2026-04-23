@@ -104,6 +104,7 @@ export class ClippingTool {
     this.objectIndex = new Map();
     this.dynamicPlanes = new Map();
     this.lastMaterialSignature = "";
+    this.materialPlaneSignature = "";
     this.capSignature = "";
     this.capCandidateCache = { signature: "", candidates: [] };
     this.lastStatsAt = 0;
@@ -259,13 +260,18 @@ export class ClippingTool {
     });
   }
 
-  refreshMaterials({ lightweight = false } = {}) {
+  refreshMaterials({ lightweight = false, activeEntries = null } = {}) {
     if (!lightweight) {
       this._resetFeedbackMaterials();
       this._invalidateCapCandidateCache();
     }
 
-    const activePlanes = this.state.enabled ? this._getActivePlanes() : [];
+    const entries = this.state.enabled
+      ? activeEntries || this._buildActivePlaneEntries()
+      : [];
+    const activePlanes = entries.map(item => item.plane);
+    this.materialPlaneSignature =
+      this._getActivePlaneReferenceSignature(entries);
     const targetRoot = this.root || this.scene;
     const targetRoots = this._resolveTargetRoots();
     const objectModeActive =
@@ -704,7 +710,7 @@ export class ClippingTool {
 
     this.renderer.localClippingEnabled = Boolean(this.state.enabled);
     this.renderer.clippingPlanes = [];
-    this.refreshMaterials({ lightweight });
+    this.refreshMaterials({ lightweight, activeEntries });
     this._updateHelpers(activeEntries);
     this._updateCaps(activeEntries);
     if (!skipTransformSync) this._syncTransformControls(activeEntries);
@@ -721,9 +727,14 @@ export class ClippingTool {
   _applyInteractionState({ skipTransformSync = false } = {}) {
     this.activeBounds = this.activeBounds || this._resolveActiveBounds();
     const activeEntries = this._buildActivePlaneEntries();
+    const planeSignature =
+      this._getActivePlaneReferenceSignature(activeEntries);
 
     this.renderer.localClippingEnabled = Boolean(this.state.enabled);
     this.renderer.clippingPlanes = [];
+    if (planeSignature !== this.materialPlaneSignature) {
+      this.refreshMaterials({ lightweight: true, activeEntries });
+    }
     this._updateHelpers(activeEntries);
     this._updateCapsForInteraction(activeEntries);
     if (!skipTransformSync) this._syncTransformControls(activeEntries);
@@ -1596,6 +1607,12 @@ export class ClippingTool {
       this.state.targets.objectUuids.join("|"),
       Number(this.state.nonTargetOpacity || NON_TARGET_OPACITY).toFixed(3)
     ].join(":");
+  }
+
+  _getActivePlaneReferenceSignature(activeEntries = null) {
+    if (!this.state.enabled) return "disabled";
+    const entries = activeEntries || this._buildActivePlaneEntries();
+    return entries.map(item => `${item.key}:${item.planeId || ""}`).join("|");
   }
 
   _ensureObjectMaterialOverrides(targetRoot, targetRoots) {

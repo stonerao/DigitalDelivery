@@ -250,6 +250,11 @@ function getFolderDropParentId(dropNode, dropType) {
   return dropNode?.data?.parentId || ROOT_FOLDER_ID;
 }
 
+function getFolderParentIdForApi(folderId) {
+  const id = String(folderId || "").trim();
+  return id === ROOT_FOLDER_ID ? "" : id;
+}
+
 async function loadDictionaries() {
   try {
     const [nodeRes, kksRes] = await Promise.all([
@@ -637,7 +642,7 @@ function confirmNewFolder() {
   }
   createHandoverDocFolder({
     name: value,
-    parentId: folderParentId.value || ROOT_FOLDER_ID
+    parentId: getFolderParentIdForApi(folderParentId.value)
   })
     .then(() => {
       folderVisible.value = false;
