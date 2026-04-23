@@ -71,6 +71,10 @@ function normalizeQuality(q) {
   return "high";
 }
 
+const INITIAL_FPS_SAMPLE_DURATION_MS = 10000;
+const INITIAL_FPS_SAMPLE_MAX_FRAME_GAP_MS = 1500;
+const INITIAL_FPS_SAMPLE_QUALITIES = new Set(["high", "medium"]);
+
 const qualityOverride = ref(null);
 const effectiveQuality = computed(() => {
   return normalizeQuality(qualityOverride.value ?? props.quality);
@@ -567,6 +571,7 @@ const emit = defineEmits([
   "error",
   "scene-click",
   "progress",
+  "initial-fps-sample",
   "object-select",
   "measure-complete",
   "measure-change",
@@ -603,6 +608,7 @@ let lastFrameAt = 0;
 let lastRenderAt = 0;
 let lastInteractionAt = 0;
 let loadedSceneModelResourceSignature = "";
+let initialFpsSample = null;
 
 let pointerDown = null;
 let onPointerDown;
@@ -2216,6 +2222,84 @@ function noteUserInteraction() {
   lastInteractionAt = performance.now();
 }
 
+function cancelInitialFpsSample() {
+  initialFpsSample = null;
+}
+
+function pauseInitialFpsSample() {
+  if (initialFpsSample) initialFpsSample.lastFrameAt = 0;
+}
+
+function isInitialFpsSampleSurfaceVisible() {
+  if (document.hidden) return false;
+  const el = rootRef.value;
+  if (!el?.isConnected) return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const style = window.getComputedStyle(el);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+
+function startInitialFpsSample({ requestId, models = [], stats = null } = {}) {
+  const quality = effectiveQuality.value;
+  if (!INITIAL_FPS_SAMPLE_QUALITIES.has(quality)) {
+    cancelInitialFpsSample();
+    return;
+  }
+
+  initialFpsSample = {
+    requestId,
+    quality,
+    activeDurationMs: 0,
+    frameCount: 0,
+    lastFrameAt: 0,
+    models: models.map(item => ({
+      instanceId: item.instanceId || "",
+      modelId: item.modelId || "",
+      modelName: item.modelName || "",
+      modelUrl: item.modelUrl || ""
+    })),
+    stats: stats ? { ...stats } : null
+  };
+}
+
+function updateInitialFpsSample(now = performance.now()) {
+  const sample = initialFpsSample;
+  if (!sample || sample.requestId !== loadRequestId || renderPaused) return;
+  if (!isInitialFpsSampleSurfaceVisible()) {
+    pauseInitialFpsSample();
+    return;
+  }
+
+  if (!sample.lastFrameAt) {
+    sample.lastFrameAt = now;
+    return;
+  }
+
+  const frameDelta = now - sample.lastFrameAt;
+  sample.lastFrameAt = now;
+  if (frameDelta <= 0 || frameDelta > INITIAL_FPS_SAMPLE_MAX_FRAME_GAP_MS) {
+    return;
+  }
+
+  sample.frameCount += 1;
+  sample.activeDurationMs += frameDelta;
+  const durationMs = sample.activeDurationMs;
+  if (durationMs < INITIAL_FPS_SAMPLE_DURATION_MS) return;
+
+  const averageFps =
+    durationMs > 0 ? (sample.frameCount * 1000) / durationMs : 0;
+  initialFpsSample = null;
+  emit("initial-fps-sample", {
+    averageFps: Number(averageFps.toFixed(2)),
+    durationMs: Math.round(durationMs),
+    frameCount: sample.frameCount,
+    quality: sample.quality,
+    models: sample.models,
+    stats: sample.stats
+  });
+}
+
 function shouldThrottleFrame(now) {
   const idleMs = now - lastInteractionAt;
   const targetFrameMs = idleMs > 1200 ? 1000 / 15 : 1000 / 60;
@@ -2319,6 +2403,7 @@ function startLoop() {
     measureTool?.update();
 
     perfMonitor?.end(renderer.info);
+    updateInitialFpsSample(performance.now());
 
     rafId = requestAnimationFrame(tick);
   };
@@ -2338,6 +2423,7 @@ function stopLoop() {
 function setRenderPaused(value) {
   renderPaused = Boolean(value);
   if (renderPaused) {
+    cancelInitialFpsSample();
     stopLoop();
     return true;
   }
@@ -2402,6 +2488,7 @@ function applySceneModelRuntimeState(models = resolvedSceneModels.value) {
 
 async function loadModel() {
   const requestId = ++loadRequestId;
+  cancelInitialFpsSample();
   errorText.value = "";
   loadProgress.value = 0;
   loadingModelIndex.value = 0;
@@ -2547,6 +2634,11 @@ async function loadModel() {
       stats: modelStats.value,
       models: loadedModels
     });
+    startInitialFpsSample({
+      requestId,
+      models: loadedModels,
+      stats: modelStats.value
+    });
   } catch (e) {
     if (requestId !== loadRequestId) return;
     const msg = e?.message || String(e);
@@ -2574,6 +2666,7 @@ async function loadModel() {
 
 function clearModel() {
   loadedSceneModelResourceSignature = "";
+  cancelInitialFpsSample();
   // 若处于 low 档贴图解绑状态，先恢复贴图，确保 dispose 能正确释放贴图资源
   restoreTexturesFromOriginalMaterials();
 
@@ -3551,6 +3644,7 @@ onMounted(() => {
 
   onVisibilityChange = () => {
     if (document.hidden) {
+      pauseInitialFpsSample();
       stopLoop();
     } else {
       startLoop();
@@ -3631,6 +3725,7 @@ watch(
 watch(
   () => effectiveQuality.value,
   val => {
+    cancelInitialFpsSample();
     applyQualitySettings(val);
   }
 );

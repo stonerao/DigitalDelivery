@@ -9,6 +9,7 @@ import {
 } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
+import { ElMessageBox } from "element-plus";
 import { Camera, Pointer, Position } from "@element-plus/icons-vue";
 import { message } from "@/utils/message";
 import { getConfig } from "@/config";
@@ -1243,6 +1244,10 @@ const qualityModeOptions = [
   { label: "低", value: "low" },
   { label: "平面渲染", value: "plane" }
 ];
+const INITIAL_FPS_PROMPT_THRESHOLD = 10;
+const INITIAL_FPS_PROMPT_QUALITIES = new Set(["high", "medium"]);
+const initialFpsPromptedKeys = new Set();
+let initialFpsPromptVisible = false;
 
 const isPlaneRendering = computed(() => quality.value === "plane");
 const planeSnapshot = ref(null);
@@ -3326,6 +3331,70 @@ function onQualityChange(val) {
     void refreshPlaneSnapshot({ force: true });
   } else {
     viewerAdapter.setRenderPaused(false);
+  }
+}
+
+function getQualityModeLabel(value) {
+  return qualityModeOptions.find(item => item.value === value)?.label || value;
+}
+
+function getInitialFpsPromptKey(payload = {}) {
+  const modelKey = (Array.isArray(payload.models) ? payload.models : [])
+    .map(
+      item =>
+        item?.instanceId ||
+        item?.modelId ||
+        item?.modelUrl ||
+        item?.modelName ||
+        ""
+    )
+    .filter(Boolean)
+    .join("|");
+  return [
+    modelKey || viewerModelUrl.value || modelId.value || "default-model",
+    payload.quality || quality.value
+  ].join("::");
+}
+
+async function handleInitialFpsSample(payload = {}) {
+  const averageFps = Number(payload.averageFps);
+  const sampleQuality = payload.quality || quality.value;
+  if (!Number.isFinite(averageFps)) return;
+  if (averageFps >= INITIAL_FPS_PROMPT_THRESHOLD) return;
+  if (!INITIAL_FPS_PROMPT_QUALITIES.has(sampleQuality)) return;
+  if (quality.value !== sampleQuality) return;
+  if (initialFpsPromptVisible) return;
+
+  const promptKey = getInitialFpsPromptKey(payload);
+  if (initialFpsPromptedKeys.has(promptKey)) return;
+  initialFpsPromptedKeys.add(promptKey);
+  initialFpsPromptVisible = true;
+
+  try {
+    await ElMessageBox.confirm(
+      `模型加载完成后的 10 秒平均帧率约 ${averageFps.toFixed(1)} FPS，低于 ${INITIAL_FPS_PROMPT_THRESHOLD} FPS。当前为${getQualityModeLabel(sampleQuality)}画质，可切换到低画质或平面渲染以降低电脑性能压力。关闭弹窗将保持当前画质。`,
+      "画质优化建议",
+      {
+        type: "warning",
+        confirmButtonText: "切换到低画质",
+        cancelButtonText: "切换到平面渲染",
+        distinguishCancelAndClose: true,
+        closeOnClickModal: false,
+        closeOnPressEscape: true,
+        showClose: true
+      }
+    );
+    if (quality.value === sampleQuality) {
+      onQualityChange("low");
+      message("已切换为低画质", { type: "info" });
+    }
+  } catch (action) {
+    if (action === "cancel" && quality.value === sampleQuality) {
+      onQualityChange("plane");
+      message("已切换为平面渲染", { type: "info" });
+    }
+  } finally {
+    initialFpsPromptVisible = false;
   }
 }
 
@@ -5640,6 +5709,7 @@ onBeforeUnmount(() => {
           :point-markers-visible="pointMarkersVisible"
           @viewer-ref-change="handleViewerRefChange"
           @loaded="handleViewerLoaded"
+          @initial-fps-sample="handleInitialFpsSample"
           @object-select="onObjectSelect"
           @measure-change="handleMeasurementChange"
           @measure-complete="handleMeasurementChange"

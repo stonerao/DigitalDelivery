@@ -179,6 +179,7 @@ const props = defineProps({
 const emit = defineEmits([
   "viewer-ref-change",
   "loaded",
+  "initial-fps-sample",
   "object-select",
   "measure-change",
   "measure-complete",
@@ -238,7 +239,8 @@ watch(
       :ifc-wasm-path="ifcWasmPath"
       :show-stats="showStats"
       :enable-clipping="enableClipping"
-      @loaded="emit('loaded')"
+      @loaded="emit('loaded', $event)"
+      @initial-fps-sample="emit('initial-fps-sample', $event)"
       @object-select="emit('object-select', $event)"
       @measure-change="emit('measure-change', $event)"
       @measure-complete="emit('measure-complete', $event)"
