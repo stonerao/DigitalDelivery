@@ -6,6 +6,29 @@ function normalizeUrlPath(url = "") {
   return String(url || "").trim();
 }
 
+function isLoopbackHost(hostname = "") {
+  const value = String(hostname || "")
+    .trim()
+    .toLowerCase();
+  return value === "localhost" || value === "127.0.0.1" || value === "::1";
+}
+
+function rewriteLoopbackUrlToCurrentOrigin(url = "") {
+  if (typeof window === "undefined") return url;
+  try {
+    const parsed = new URL(url);
+    const currentOrigin = new URL(window.location.origin);
+    if (!isLoopbackHost(parsed.hostname)) return url;
+    if (isLoopbackHost(currentOrigin.hostname)) return url;
+    return new URL(
+      `${parsed.pathname}${parsed.search}${parsed.hash}`,
+      currentOrigin.origin
+    ).href;
+  } catch {
+    return url;
+  }
+}
+
 function isBlobLike(value) {
   return typeof Blob !== "undefined" && value instanceof Blob;
 }
@@ -19,6 +42,10 @@ export function resolveHandoverModelUrl(url = "") {
   if (!text) return "";
 
   if (isAbsoluteUrl(text)) {
+    const loopbackRewrittenUrl = rewriteLoopbackUrlToCurrentOrigin(text);
+    if (loopbackRewrittenUrl !== text) {
+      return loopbackRewrittenUrl;
+    }
     if (
       import.meta.env.DEV &&
       DEV_REMOTE_ORIGIN &&

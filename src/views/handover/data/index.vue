@@ -1,9 +1,11 @@
 ﻿<script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ElMessageBox } from "element-plus";
 import { useRoute } from "vue-router";
 import { message } from "@/utils/message";
 import { getHandoverSystemNodeOptions } from "@/api/handoverDictionary";
 import {
+  deleteHandoverKks,
   exportHandoverKks,
   getHandoverKksImportTask,
   getHandoverKksList,
@@ -26,6 +28,7 @@ const versionLoading = ref(false);
 const validating = ref(false);
 const exporting = ref(false);
 const rowValidatingId = ref("");
+const rowDeletingId = ref("");
 const importSubmitting = ref(false);
 
 const records = ref([]);
@@ -526,6 +529,41 @@ async function validateOne(row) {
   }
 }
 
+async function removeOne(row) {
+  if (!row?.id || rowDeletingId.value) return;
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 KKS“${row.kks || row.name || row.id}”吗？`,
+      "删除确认",
+      {
+        type: "warning",
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消"
+      }
+    );
+
+    rowDeletingId.value = row.id;
+    if (records.value.length === 1 && pagination.value.page > 1) {
+      pagination.value.page -= 1;
+    }
+
+    await deleteHandoverKks({
+      ids: [row.id]
+    });
+
+    message(`KKS ${row.kks || row.id} 已删除`, { type: "success" });
+    await loadRecords();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    message(error?.message || `删除 KKS ${row.kks || row.id} 失败`, {
+      type: "error"
+    });
+  } finally {
+    rowDeletingId.value = "";
+  }
+}
+
 function openExternalUrl(url) {
   if (!url) return;
   window.open(url, "_blank", "noopener,noreferrer");
@@ -606,16 +644,26 @@ function openExternalUrl(url) {
             />
             <el-table-column prop="createdAt" label="创建时间" width="180" />
             <el-table-column prop="updatedAt" label="更新时间" width="180" />
-            <el-table-column label="操作" width="120" fixed="right">
+            <el-table-column label="操作" width="180" fixed="right">
               <template #default="{ row }">
-                <el-button
-                  text
-                  type="primary"
-                  :loading="rowValidatingId === row.id"
-                  @click="validateOne(row)"
-                >
-                  单条校验
-                </el-button>
+                <div class="flex items-center gap-2">
+                  <el-button
+                    text
+                    type="primary"
+                    :loading="rowValidatingId === row.id"
+                    @click="validateOne(row)"
+                  >
+                    单条校验
+                  </el-button>
+                  <el-button
+                    text
+                    type="danger"
+                    :loading="rowDeletingId === row.id"
+                    @click="removeOne(row)"
+                  >
+                    删除
+                  </el-button>
+                </div>
               </template>
             </el-table-column>
           </el-table>

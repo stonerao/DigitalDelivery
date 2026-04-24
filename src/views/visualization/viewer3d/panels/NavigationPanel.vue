@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+import NavigationMapPanel from "./NavigationMapPanel.vue";
 
 defineOptions({
   name: "NavigationPanel"
@@ -30,6 +31,26 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  navigationSnapshot: {
+    type: Object,
+    default: null
+  },
+  navigationSnapshotLoading: {
+    type: Boolean,
+    default: false
+  },
+  navigationMapItems: {
+    type: Array,
+    default: () => []
+  },
+  navigationMapActiveId: {
+    type: String,
+    default: ""
+  },
+  navigationMapDisabled: {
+    type: Boolean,
+    default: false
+  },
   layerTreeData: {
     type: Array,
     default: () => []
@@ -53,6 +74,8 @@ const emit = defineEmits([
   "navigation-node-contextmenu",
   "update:selectedSystemNodeId",
   "update:selectedQuickKks",
+  "navigation-map-select",
+  "refresh-navigation-map",
   "locate-system",
   "locate-by-kks",
   "apply-display-mode",
@@ -84,6 +107,16 @@ defineExpose({
 <template>
   <el-scrollbar height="100%">
     <div class="space-y-3 pr-1">
+      <NavigationMapPanel
+        :snapshot="navigationSnapshot"
+        :loading="navigationSnapshotLoading"
+        :items="navigationMapItems"
+        :active-item-id="navigationMapActiveId"
+        :disabled="navigationMapDisabled"
+        @select-item="emit('navigation-map-select', $event)"
+        @refresh="emit('refresh-navigation-map')"
+      />
+
       <div class="rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 flex items-center justify-between gap-2">
           <div class="text-sm font-semibold">导航</div>

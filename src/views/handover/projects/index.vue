@@ -302,18 +302,8 @@ function normalizeProjectItem(item) {
   };
 }
 
-function formatProjectInfoSummary(value) {
-  const text = String(value || "").trim();
-  if (!text) return "-";
-  return text.length > 80 ? `${text.slice(0, 80)}...` : text;
-}
-
 function buildProjectRow(item) {
-  const record = normalizeProjectItem(item);
-  return {
-    ...record,
-    projectInfoSummary: formatProjectInfoSummary(record.projectInfo)
-  };
+  return normalizeProjectItem(item);
 }
 
 function formatProjectTypeDisplay(row) {
@@ -459,7 +449,7 @@ async function openCreate() {
 
 async function openBaseEdit(row) {
   if (!row?.id) {
-    message("缺少项目ID，无法编辑项目信息", { type: "warning" });
+    message("缺少项目ID，无法编辑项目", { type: "warning" });
     return;
   }
 
@@ -495,29 +485,13 @@ async function openEdit(row) {
   });
 }
 
-function validateProjectInfo(value) {
-  const text = String(value || "").trim();
-  if (!text) return true;
-  try {
-    JSON.parse(text);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
 async function submitForm() {
   const projectName = formData.projectName.trim();
   const projectType = formData.projectType || "";
-  const projectInfo = formData.projectInfo.trim();
+  const projectInfo = String(formData.projectInfo || "").trim();
 
   if (!projectName) {
     message("项目名称不能为空", { type: "warning" });
-    return;
-  }
-
-  if (!validateProjectInfo(projectInfo)) {
-    message("项目信息必须是合法的 JSON 文本", { type: "warning" });
     return;
   }
 
@@ -534,7 +508,7 @@ async function submitForm() {
       formVisible.value = false;
       await loadProjects();
       router.push({
-        path: "/visualization/3d-viewer",
+        path: "/visualization/3d-fullscreen",
         query: {
           projectId: createdProject.id
         }
@@ -548,7 +522,7 @@ async function submitForm() {
       projectType,
       projectInfo
     });
-    message("项目信息已更新", { type: "success" });
+    message("项目已更新", { type: "success" });
     formVisible.value = false;
     await loadProjects();
   } catch (error) {
@@ -943,12 +917,6 @@ loadProjects();
                 {{ formatProjectTypeDisplay(row) }}
               </template>
             </el-table-column>
-            <el-table-column
-              prop="projectInfoSummary"
-              label="项目信息"
-              min-width="280"
-              show-overflow-tooltip
-            />
             <el-table-column prop="createdAt" label="创建时间" width="180" />
             <el-table-column prop="updatedAt" label="更新时间" width="180" />
             <el-table-column prop="createdBy" label="创建人" width="120" />
@@ -960,7 +928,7 @@ loadProjects();
                     详情
                   </el-button>
                   <el-button link type="primary" @click="openBaseEdit(row)">
-                    编辑信息
+                    编辑项目
                   </el-button>
                   <el-button link type="primary" @click="openEdit(row)">
                     编辑
@@ -1131,7 +1099,7 @@ loadProjects();
 
     <el-dialog
       v-model="formVisible"
-      :title="formMode === 'create' ? '新建项目' : '编辑项目信息'"
+      :title="formMode === 'create' ? '新建项目' : '编辑项目'"
       width="720px"
       destroy-on-close
     >
@@ -1158,18 +1126,7 @@ loadProjects();
               class="w-full"
             />
           </el-form-item>
-          <el-form-item label="项目信息">
-            <el-input
-              v-model="formData.projectInfo"
-              type="textarea"
-              :rows="12"
-              placeholder='请输入 JSON 文本，例如：{"code":"P001"}'
-            />
-          </el-form-item>
         </el-form>
-        <div class="text-xs text-[var(--el-text-color-secondary)]">
-          `projectInfo` 为空时允许提交；非空时需为合法 JSON 文本。
-        </div>
       </div>
       <template #footer>
         <el-button @click="formVisible = false">取消</el-button>

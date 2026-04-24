@@ -77,6 +77,26 @@ defineProps({
     type: Array,
     default: () => []
   },
+  navigationSnapshot: {
+    type: Object,
+    default: null
+  },
+  navigationSnapshotLoading: {
+    type: Boolean,
+    default: false
+  },
+  navigationMapItems: {
+    type: Array,
+    default: () => []
+  },
+  navigationMapActiveId: {
+    type: String,
+    default: ""
+  },
+  navigationMapDisabled: {
+    type: Boolean,
+    default: false
+  },
   layerTreeData: {
     type: Array,
     default: () => []
@@ -233,6 +253,8 @@ const emit = defineEmits([
   "navigation-node-contextmenu",
   "update:selectedSystemNodeId",
   "update:selectedQuickKks",
+  "navigation-map-select",
+  "refresh-navigation-map",
   "locate-system",
   "locate-by-kks",
   "apply-display-mode",
@@ -343,6 +365,11 @@ function handleNavigationNodeContextmenu(...args) {
             :selected-quick-kks="selectedQuickKks"
             :scene-device-system-options="sceneDeviceSystemOptions"
             :scene-device-kks-options="sceneDeviceKksOptions"
+            :navigation-snapshot="navigationSnapshot"
+            :navigation-snapshot-loading="navigationSnapshotLoading"
+            :navigation-map-items="navigationMapItems"
+            :navigation-map-active-id="navigationMapActiveId"
+            :navigation-map-disabled="navigationMapDisabled"
             :layer-tree-data="layerTreeData"
             :layer-checked-keys="layerCheckedKeys"
             :display-mode="displayMode"
@@ -353,6 +380,8 @@ function handleNavigationNodeContextmenu(...args) {
               emit('update:selectedSystemNodeId', $event)
             "
             @update:selected-quick-kks="emit('update:selectedQuickKks', $event)"
+            @navigation-map-select="emit('navigation-map-select', $event)"
+            @refresh-navigation-map="emit('refresh-navigation-map')"
             @locate-system="emit('locate-system')"
             @locate-by-kks="emit('locate-by-kks')"
             @apply-display-mode="emit('apply-display-mode', $event)"

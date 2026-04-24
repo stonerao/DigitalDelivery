@@ -1225,6 +1225,7 @@ async function showAllObjects() {
 const ctxMenuVisible = ref(false);
 const ctxMenuStyle = ref({ top: "0px", left: "0px" });
 const ctxMenuNode = ref(null);
+const ctxMenuIsDevice = computed(() => ctxMenuNode.value?.kind === "device");
 
 function handleNavTreeContextMenu(event, data) {
   event.preventDefault();
@@ -1245,6 +1246,58 @@ function handleNavTreeContextMenu(event, data) {
     document.addEventListener("click", closeMenu, true);
     document.addEventListener("contextmenu", closeMenu, true);
   }, 0);
+}
+
+function getCtxMenuDevice() {
+  const node = ctxMenuNode.value;
+  if (!node) return null;
+  const raw = node.raw || node;
+  const uuid = String(raw.uuid || node.uuid || "").trim();
+  if (!uuid) return null;
+  return (
+    sceneDevices.value.find(item => item.uuid === uuid) || {
+      uuid,
+      name: raw.name || node.label || "当前构件",
+      path: raw.path || raw.name || node.label || "",
+      type: raw.type || node.type || "Mesh",
+      kks: raw.kks || "",
+      nodeId: raw.nodeId || node.nodeId || "",
+      systemName: raw.systemName || ""
+    }
+  );
+}
+
+function onCtxViewObjectInfo() {
+  ctxMenuVisible.value = false;
+  const device = getCtxMenuDevice();
+  if (!device?.uuid) {
+    message("当前节点不是构件节点，无法查看构件属性", {
+      type: "warning"
+    });
+    return;
+  }
+
+  selectedDeviceUuid.value = device.uuid;
+  syncNavigationSelections(device);
+  viewerRef.value?.focusByUUIDs?.(getSceneDeviceUuids(device));
+
+  const selected = viewerRef.value?.selectByUUID?.(device.uuid, {
+    emitEvent: true
+  });
+  if (selected) {
+    showObjectPanel.value = true;
+    return;
+  }
+
+  const info = viewerRef.value?.getSelectedObject?.();
+  if (info) {
+    onObjectSelect(info);
+    return;
+  }
+
+  message("当前构件无法查看属性，请确认模型已加载", {
+    type: "warning"
+  });
 }
 
 const propDialogVisible = ref(false);
@@ -2163,6 +2216,13 @@ watch(
       :style="ctxMenuStyle"
       @contextmenu.prevent.stop
     >
+      <div
+        v-if="ctxMenuIsDevice"
+        class="dd-nav-ctx-item"
+        @click.stop="onCtxViewObjectInfo"
+      >
+        查看构件属性
+      </div>
       <div class="dd-nav-ctx-item" @click.stop="onCtxBindProp">绑定属性</div>
       <div class="dd-nav-ctx-item" @click.stop="onCtxEditProp">修改属性</div>
       <div

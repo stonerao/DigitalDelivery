@@ -1,4 +1,7 @@
-import { normalizeHandoverModelRecord } from "@/utils/handoverModel";
+import {
+  normalizeHandoverModelRecord,
+  resolveHandoverModelUrl
+} from "@/utils/handoverModel";
 
 export function unwrapViewerApiData(resp, fallback = {}) {
   return resp?.data ?? resp ?? fallback;
@@ -17,7 +20,8 @@ export function normalizeViewerModelItem(item) {
     updatedAt: item?.updatedAt || "-",
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
-    url: item?.url || ""
+    url: item?.url || "",
+    thumbnailUrl: item?.thumbnailUrl || item?.thumbnail || ""
   });
 }
 
@@ -51,7 +55,7 @@ export function createViewerSceneModel(
     instanceId,
     modelId: detail.id || partial.modelId || "",
     modelName: detail.name || partial.modelName || "未命名模型",
-    modelUrl: detail.url || partial.modelUrl || "",
+    modelUrl: resolveHandoverModelUrl(detail.url || partial.modelUrl || ""),
     visible: partial.visible !== false,
     locked: Boolean(partial.locked),
     opacity: Number.isFinite(Number(partial.opacity))

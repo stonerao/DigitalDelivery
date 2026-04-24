@@ -1,9 +1,11 @@
 <script setup>
+import { computed } from "vue";
+
 defineOptions({
   name: "ObjectInfoPanel"
 });
 
-defineProps({
+const props = defineProps({
   visible: {
     type: Boolean,
     default: false
@@ -13,6 +15,10 @@ defineProps({
     default: null
   },
   selectedSceneDevice: {
+    type: Object,
+    default: null
+  },
+  selectedDeviceProfile: {
     type: Object,
     default: null
   },
@@ -43,6 +49,33 @@ defineProps({
 });
 
 const emit = defineEmits(["close", "update:pointMarkersVisible"]);
+
+const hasDeviceLedger = computed(() => {
+  const profile = props.selectedDeviceProfile;
+  if (!profile) return false;
+  return [
+    profile.ledgerNo,
+    profile.manufacturer,
+    profile.model,
+    profile.ratedPower,
+    profile.ratedVoltage,
+    profile.medium,
+    profile.functionDesc,
+    profile.updatedAt
+  ].some(Boolean);
+});
+
+const hasDeviceStructure = computed(
+  () =>
+    Array.isArray(props.selectedDeviceProfile?.structureParams) &&
+    props.selectedDeviceProfile.structureParams.length > 0
+);
+
+const hasDeviceRunning = computed(
+  () =>
+    Array.isArray(props.selectedDeviceProfile?.runningParams) &&
+    props.selectedDeviceProfile.runningParams.length > 0
+);
 </script>
 
 <template>
@@ -185,6 +218,110 @@ const emit = defineEmits(["close", "update:pointMarkersVisible"]);
             </el-descriptions>
             <div v-else class="text-sm text-[var(--el-text-color-secondary)]">
               {{ selectedKksDetailError || "当前构件未绑定 KKS 业务数据。" }}
+            </div>
+          </div>
+        </el-card>
+
+        <el-card v-if="hasDeviceLedger" shadow="never">
+          <template #header>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-semibold">设备台账</span>
+              <el-tag
+                v-if="selectedDeviceProfile?.dataSourceLabel"
+                size="small"
+                effect="plain"
+              >
+                {{ selectedDeviceProfile.dataSourceLabel }}
+              </el-tag>
+            </div>
+          </template>
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="设备台账号">
+              {{ selectedDeviceProfile?.ledgerNo || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="制造厂家">
+              {{ selectedDeviceProfile?.manufacturer || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="设备型号">
+              {{ selectedDeviceProfile?.model || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="额定功率">
+              {{ selectedDeviceProfile?.ratedPower || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="额定电压">
+              {{ selectedDeviceProfile?.ratedVoltage || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="介质">
+              {{ selectedDeviceProfile?.medium || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="功能说明">
+              {{ selectedDeviceProfile?.functionDesc || "-" }}
+            </el-descriptions-item>
+            <el-descriptions-item label="更新时间">
+              {{ selectedDeviceProfile?.updatedAt || "-" }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <el-card v-if="hasDeviceStructure" shadow="never">
+          <template #header>
+            <span class="text-sm font-semibold">结构参数</span>
+          </template>
+          <el-descriptions :column="1" size="small">
+            <el-descriptions-item
+              v-for="item in selectedDeviceProfile.structureParams"
+              :key="item.label"
+              :label="item.label"
+            >
+              {{ item.value || "-" }}
+            </el-descriptions-item>
+          </el-descriptions>
+        </el-card>
+
+        <el-card v-if="hasDeviceRunning" shadow="never">
+          <template #header>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-sm font-semibold">运行参数</span>
+              <el-tag
+                v-if="selectedDeviceProfile?.runningSourceLabel"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                {{ selectedDeviceProfile.runningSourceLabel }}
+              </el-tag>
+            </div>
+          </template>
+          <div class="space-y-2">
+            <div
+              v-for="item in selectedDeviceProfile.runningParams"
+              :key="item.label"
+              class="flex items-center justify-between rounded bg-[var(--el-fill-color-light)] px-3 py-2"
+            >
+              <div class="text-sm">{{ item.label }}</div>
+              <div class="flex items-center gap-2">
+                <span class="font-semibold">
+                  {{ item.value }}{{ item.unit }}
+                </span>
+                <el-tag
+                  size="small"
+                  :type="
+                    item.status === 'warning'
+                      ? 'warning'
+                      : item.status === 'alarm'
+                        ? 'danger'
+                        : 'success'
+                  "
+                >
+                  {{
+                    item.status === "warning"
+                      ? "预警"
+                      : item.status === "alarm"
+                        ? "告警"
+                        : "正常"
+                  }}
+                </el-tag>
+              </div>
             </div>
           </div>
         </el-card>

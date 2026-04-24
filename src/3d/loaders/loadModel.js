@@ -101,9 +101,7 @@ export async function loadModelToGroup({
   if (type === "gltf" || type === "glb") {
     const loader = new GLTFLoader();
     const requestHeaders = getModelRequestHeaders(url);
-    if (type === "gltf") {
-      applyModelRequestHeaders(loader, url);
-    }
+    applyModelRequestHeaders(loader, url);
 
     // Draco 解码器（用于 draco 压缩的 glb/gltf）
     // decoder 地址基于 BASE_URL，兼容子路径部署

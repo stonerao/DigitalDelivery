@@ -154,6 +154,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  selectedDeviceProfile: {
+    type: Object,
+    default: null
+  },
   selectedKksDetail: {
     type: Object,
     default: null
@@ -313,6 +317,7 @@ watch(
       :visible="showObjectPanel"
       :selected-object-info="selectedObjectInfo"
       :selected-scene-device="selectedSceneDevice"
+      :selected-device-profile="selectedDeviceProfile"
       :selected-bound-documents="selectedSceneDevice?.boundDocuments || []"
       :selected-kks-detail="selectedKksDetail"
       :selected-kks-detail-loading="selectedKksDetailLoading"

@@ -37,6 +37,10 @@ export const exportHandoverKks = params => {
   return http.request("get", "/api/handover/kks/export", { params });
 };
 
+export const deleteHandoverKks = data => {
+  return http.request("post", "/api/handover/kks/delete", { data });
+};
+
 export const getHandoverKksVersions = () => {
   return http.request("get", "/api/handover/kks/versions");
 };

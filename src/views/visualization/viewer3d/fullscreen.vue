@@ -25,6 +25,7 @@ import {
   triggerHandoverDocumentDownload,
   unwrapHandoverDocumentFileResponse
 } from "@/utils/handoverDocument";
+import { resolveHandoverModelUrl } from "@/utils/handoverModel";
 import {
   getHandoverModelDetail,
   getHandoverModelList
@@ -352,6 +353,15 @@ const routeModelId = computed(() => {
   const value = route.query?.id;
   return typeof value === "string" ? value.trim() : "";
 });
+const routeModelUrl = computed(() => {
+  const value = route.query?.url;
+  if (typeof value !== "string") return "";
+  return resolveHandoverModelUrl(value.trim());
+});
+const routeModelName = computed(() => {
+  const value = route.query?.name;
+  return typeof value === "string" ? value.trim() : "";
+});
 const handoverProjectId = computed(() => {
   const value = route.query?.projectId;
   return typeof value === "string" ? value.trim() : "";
@@ -399,13 +409,19 @@ const modelId = computed(() => {
 
 const modelUrl = computed(() => {
   return String(
-    activeSceneModel.value?.modelUrl || activeModelDetail.value?.url || ""
+    activeSceneModel.value?.modelUrl ||
+      activeModelDetail.value?.url ||
+      routeModelUrl.value ||
+      ""
   ).trim();
 });
 
 const modelName = computed(() => {
   return String(
-    activeSceneModel.value?.modelName || activeModelDetail.value?.name || ""
+    activeSceneModel.value?.modelName ||
+      activeModelDetail.value?.name ||
+      routeModelName.value ||
+      ""
   ).trim();
 });
 
@@ -966,7 +982,18 @@ async function fetchModelDetail(id) {
   if (!id) return null;
   try {
     const response = await getHandoverModelDetail({ id });
-    const detail = normalizeViewerModelItem(response?.data ?? response ?? {});
+    const rawDetail = response?.data ?? response ?? {};
+    const isRouteModel =
+      routeModelId.value && String(id).trim() === routeModelId.value;
+    const detail = normalizeViewerModelItem({
+      ...rawDetail,
+      name: rawDetail?.name || (isRouteModel ? routeModelName.value : ""),
+      // 从 3d-viewer 进入全屏时，优先沿用上页已验证可用的模型地址。
+      url:
+        isRouteModel && routeModelUrl.value
+          ? routeModelUrl.value
+          : rawDetail?.url || ""
+    });
     if (!detail.url) {
       message("当前模型缺少可预览地址", { type: "warning" });
     }
@@ -1013,6 +1040,19 @@ async function initializeSceneModels(projectInfo = null) {
       : [];
 
   if (!targetIds.length) {
+    if (routeModelUrl.value) {
+      const routeModel = createFullscreenSceneModel(
+        normalizeViewerModelItem({
+          id: routeModelId.value,
+          name: routeModelName.value || "未命名模型",
+          url: routeModelUrl.value
+        })
+      );
+      sceneModels.value = [routeModel];
+      activeSceneModelId.value = routeModel.modelId || routeModelId.value || "";
+      syncActiveModelDetail();
+      return;
+    }
     sceneModels.value = [];
     activeSceneModelId.value = "";
     syncActiveModelDetail();
@@ -1137,6 +1177,19 @@ async function reloadProjectSceneContext() {
 async function initializeRouteSceneModel(modelId) {
   if (sceneModels.value.length > 0) return;
   if (!modelId) {
+    if (routeModelUrl.value) {
+      const routeModel = createFullscreenSceneModel(
+        normalizeViewerModelItem({
+          id: routeModelId.value,
+          name: routeModelName.value || "未命名模型",
+          url: routeModelUrl.value
+        })
+      );
+      sceneModels.value = [routeModel];
+      activeSceneModelId.value = routeModel.modelId || routeModelId.value || "";
+      syncActiveModelDetail();
+      return;
+    }
     activeSceneModelId.value = "";
     syncActiveModelDetail();
     return;
@@ -1161,7 +1214,8 @@ const selectableModelOptions = computed(() => {
     .filter(item => !loadedIds.has(item.id))
     .map(item => ({
       label: item.name,
-      value: item.id
+      value: item.id,
+      raw: item
     }));
 });
 
@@ -1253,7 +1307,11 @@ const isPlaneRendering = computed(() => quality.value === "plane");
 const planeSnapshot = ref(null);
 const planeSnapshotLoading = ref(false);
 const planeObjectPositionMap = ref({});
+const navigationSnapshot = ref(null);
+const navigationSnapshotLoading = ref(false);
+const navigationObjectPositionMap = ref({});
 let planeSnapshotRequestId = 0;
+let navigationSnapshotRequestId = 0;
 
 const viewerModelUrl = computed(() => {
   const activeLod = isPlaneRendering.value
@@ -1263,13 +1321,32 @@ const viewerModelUrl = computed(() => {
       );
   const qualityProfiles = sceneManifest.value?.qualityProfiles || {};
   const qualityProfileKey = isPlaneRendering.value ? "low" : quality.value;
-  const qualityMappedUrl = qualityProfiles[qualityProfileKey];
-  return (
-    String(activeLod?.modelUrl || "").trim() ||
-    String(qualityMappedUrl || "").trim() ||
-    String(sceneManifest.value?.defaultModelUrl || "").trim() ||
-    modelUrl.value
+  const qualityMappedUrl = resolveHandoverModelUrl(
+    qualityProfiles[qualityProfileKey] || ""
   );
+  const manifestDefaultUrl = resolveHandoverModelUrl(
+    sceneManifest.value?.defaultModelUrl || ""
+  );
+  const baseModelUrl = resolveHandoverModelUrl(modelUrl.value || "");
+  const activeLodUrl = resolveHandoverModelUrl(activeLod?.modelUrl || "");
+  const shouldPreferRouteModelUrl =
+    Boolean(routeModelUrl.value) &&
+    Boolean(routeModelId.value) &&
+    String(activeSceneModel.value?.modelId || modelId.value || "").trim() ===
+      routeModelId.value &&
+    !activeLodUrl &&
+    !isPlaneRendering.value &&
+    qualityProfileKey === "high";
+
+  if (activeLodUrl) {
+    return activeLodUrl;
+  }
+
+  if (shouldPreferRouteModelUrl) {
+    return baseModelUrl || qualityMappedUrl || manifestDefaultUrl;
+  }
+
+  return qualityMappedUrl || manifestDefaultUrl || baseModelUrl;
 });
 
 const runtimeAssetGroups = computed(() =>
@@ -1642,6 +1719,72 @@ const currentMeasurementPoints = computed(() => {
   }));
 });
 
+const selectedDeviceProfile = computed(() => {
+  const selectedDevice = selectedSceneDevice.value;
+  const detail = selectedKksDetail.value || null;
+  const kks = String(selectedDevice?.kks || detail?.kks || "").trim();
+  const profile = kks ? ddStore.getDeviceProfileByKks(kks) : null;
+  const structureParams = Array.isArray(profile?.structureParams)
+    ? profile.structureParams
+    : Array.isArray(detail?.structureParams)
+      ? detail.structureParams
+      : [];
+  const runningParams = Array.isArray(profile?.runningParams)
+    ? profile.runningParams
+    : Array.isArray(detail?.runningParams)
+      ? detail.runningParams
+      : [];
+  const hasLedgerFields = [
+    profile?.ledgerNo,
+    profile?.manufacturer,
+    profile?.model,
+    profile?.ratedPower,
+    profile?.ratedVoltage,
+    profile?.medium,
+    profile?.functionDesc,
+    detail?.ledgerNo,
+    detail?.manufacturer,
+    detail?.model
+  ].some(Boolean);
+  if (
+    !kks &&
+    !hasLedgerFields &&
+    !structureParams.length &&
+    !runningParams.length
+  ) {
+    return null;
+  }
+  return {
+    ...(detail || {}),
+    ...(profile || {}),
+    kks,
+    name: profile?.name || detail?.name || selectedDevice?.name || "",
+    systemName:
+      detail?.systemName ||
+      detail?.systemNodeLabel ||
+      detail?.systemNodeName ||
+      profile?.systemName ||
+      selectedDevice?.systemName ||
+      "",
+    ledgerNo: profile?.ledgerNo || detail?.ledgerNo || "",
+    manufacturer: profile?.manufacturer || detail?.manufacturer || "",
+    model: profile?.model || detail?.model || "",
+    ratedPower: profile?.ratedPower || detail?.ratedPower || "",
+    ratedVoltage: profile?.ratedVoltage || detail?.ratedVoltage || "",
+    medium: profile?.medium || detail?.medium || "",
+    functionDesc: profile?.functionDesc || detail?.functionDesc || "",
+    structureParams,
+    runningParams,
+    updatedAt: detail?.updatedAt || profile?.updatedAt || "",
+    dataSourceLabel: hasLedgerFields
+      ? "设备台账"
+      : detail?.kks
+        ? "业务详情"
+        : "",
+    runningSourceLabel: runningParams.length ? "运行参数" : ""
+  };
+});
+
 const filteredSceneDevices = computed(() => {
   const keyword = deviceKeyword.value.trim().toLowerCase();
   if (!keyword) return sceneDevices.value;
@@ -1680,6 +1823,90 @@ const sceneDeviceKksOptions = computed(() => {
       value: item.kks
     }))
     .sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+});
+
+const navigationMapSystemItems = computed(() => {
+  return sceneDeviceSystemOptions.value
+    .map(system => {
+      const positions = sceneDevices.value
+        .filter(item => item.nodeId === system.value)
+        .map(item => navigationObjectPositionMap.value[item.uuid])
+        .filter(Boolean);
+      const center = averageWorldPositions(positions);
+      const percent = projectWorldPositionToSnapshot(center);
+      if (!percent) return null;
+      return {
+        id: `system:${system.value}`,
+        type: "system",
+        label: system.label,
+        shortLabel:
+          String(system.label || "")
+            .trim()
+            .slice(0, 2) || "系统",
+        count: system.count || 0,
+        nodeId: system.value,
+        ...percent
+      };
+    })
+    .filter(Boolean);
+});
+
+const navigationMapBookmarkItems = computed(() => {
+  return bookmarks.value
+    .map((bookmark, index) => {
+      const target = normalizeWorldVector(
+        bookmark?.camera?.target || bookmark?.camera?.position
+      );
+      const percent = projectWorldPositionToSnapshot(target);
+      if (!percent) return null;
+      return {
+        id: `bookmark:${index}`,
+        type: "bookmark",
+        label: bookmark?.name || `视角 ${index + 1}`,
+        shortLabel: `${index + 1}`,
+        bookmark,
+        ...percent
+      };
+    })
+    .filter(Boolean);
+});
+
+const navigationMapSelectedDeviceItem = computed(() => {
+  const device = selectedSceneDevice.value;
+  if (!device?.uuid) return null;
+  const percent = projectWorldPositionToSnapshot(
+    navigationObjectPositionMap.value[device.uuid]
+  );
+  if (!percent) return null;
+  return {
+    id: `device:${device.uuid}`,
+    type: "device",
+    label: device.kks ? `${device.name}（${device.kks}）` : device.name,
+    shortLabel: "当前",
+    device,
+    ...percent
+  };
+});
+
+const navigationMapItems = computed(() => {
+  const items = [
+    ...navigationMapSystemItems.value,
+    ...navigationMapBookmarkItems.value
+  ];
+  if (navigationMapSelectedDeviceItem.value) {
+    items.push(navigationMapSelectedDeviceItem.value);
+  }
+  return items;
+});
+
+const navigationMapActiveId = computed(() => {
+  if (selectedSceneDevice.value?.uuid) {
+    return `device:${selectedSceneDevice.value.uuid}`;
+  }
+  if (selectedSystemNodeId.value) {
+    return `system:${selectedSystemNodeId.value}`;
+  }
+  return "";
 });
 
 const sceneObjectOptions = computed(() => {
@@ -1876,6 +2103,24 @@ const planeSnapshotSignature = computed(() =>
   })
 );
 
+const navigationSnapshotSignature = computed(() =>
+  JSON.stringify({
+    modelUrl: viewerModelUrl.value,
+    models: viewerSceneModels.value.map(item => ({
+      id: item.modelId,
+      instanceId: item.instanceId,
+      visible: item.visible !== false,
+      transform: item.transform
+    })),
+    lod: selectedLodId.value,
+    materialTheme: materialTheme.value,
+    groups: runtimeAssetGroups.value.map(item => ({
+      id: item.id || item.name || "",
+      visible: item.visible !== false
+    }))
+  })
+);
+
 function normalizeWorldVector(value) {
   if (Array.isArray(value) && value.length >= 3) {
     const next = value.slice(0, 3).map(Number);
@@ -1885,6 +2130,43 @@ function normalizeWorldVector(value) {
     return normalizeWorldVector(value.toArray());
   }
   return null;
+}
+
+function clampPercent(value) {
+  return Math.min(100, Math.max(0, value));
+}
+
+function projectWorldPositionToSnapshot(
+  position,
+  snapshot = navigationSnapshot.value
+) {
+  const world = normalizeWorldVector(position);
+  const bounds = snapshot?.viewBounds;
+  if (!world || !bounds) return null;
+  const width = Math.max(bounds.maxX - bounds.minX, 0.0001);
+  const depth = Math.max(bounds.maxZ - bounds.minZ, 0.0001);
+  return {
+    xPercent: clampPercent(((world[0] - bounds.minX) / width) * 100),
+    yPercent: clampPercent(((bounds.maxZ - world[2]) / depth) * 100)
+  };
+}
+
+function averageWorldPositions(positions = []) {
+  if (!positions.length) return null;
+  const total = positions.reduce(
+    (result, item) => {
+      result.x += item[0];
+      result.y += item[1];
+      result.z += item[2];
+      return result;
+    },
+    { x: 0, y: 0, z: 0 }
+  );
+  return [
+    total.x / positions.length,
+    total.y / positions.length,
+    total.z / positions.length
+  ];
 }
 
 function rebuildPlaneObjectPositionMap() {
@@ -1903,6 +2185,19 @@ function rebuildPlaneObjectPositionMap() {
     if (position) next[uuid] = position;
   });
   planeObjectPositionMap.value = next;
+}
+
+function rebuildNavigationObjectPositionMap() {
+  if (!viewerAdapter.isReady()) return;
+  const next = {};
+  sceneDevices.value.forEach(item => {
+    if (!item?.uuid) return;
+    const position = normalizeWorldVector(
+      viewerAdapter.getObjectWorldPositionByUUID(item.uuid)
+    );
+    if (position) next[item.uuid] = position;
+  });
+  navigationObjectPositionMap.value = next;
 }
 
 function guardPlaneUnsupported(action = "该操作") {
@@ -1941,6 +2236,40 @@ async function refreshPlaneSnapshot({ force = false } = {}) {
     if (requestId === planeSnapshotRequestId) {
       planeSnapshotLoading.value = false;
       if (isPlaneRendering.value) {
+        viewerAdapter.setRenderPaused(true);
+      }
+    }
+  }
+}
+
+async function refreshNavigationSnapshot({ force = false } = {}) {
+  if (!viewerAdapter.isReady()) return;
+  if (navigationSnapshotLoading.value && !force) return;
+  const requestId = ++navigationSnapshotRequestId;
+  const shouldResumeRender = isPlaneRendering.value;
+  navigationSnapshotLoading.value = true;
+  try {
+    await nextTick();
+    if (shouldResumeRender) {
+      viewerAdapter.setRenderPaused(false);
+    }
+    const snapshot = viewerAdapter.captureTopViewSnapshot({
+      maxWidth: 960,
+      backgroundColor: "#eef2f6"
+    });
+    if (requestId !== navigationSnapshotRequestId) return;
+    navigationSnapshot.value = snapshot || null;
+    rebuildNavigationObjectPositionMap();
+  } catch (error) {
+    console.error("capture navigation snapshot failed", error);
+    if (requestId === navigationSnapshotRequestId) {
+      navigationSnapshot.value = null;
+      message("生成导航图失败", { type: "error" });
+    }
+  } finally {
+    if (requestId === navigationSnapshotRequestId) {
+      navigationSnapshotLoading.value = false;
+      if (shouldResumeRender) {
         viewerAdapter.setRenderPaused(true);
       }
     }
@@ -3737,6 +4066,24 @@ async function locateByKks(kks = selectedQuickKks.value) {
   });
 }
 
+async function handleNavigationMapSelect(item) {
+  if (!item) return;
+  if (item.type === "system") {
+    selectedSystemNodeId.value = item.nodeId || "";
+    await locateSystem(item.nodeId);
+    return;
+  }
+  if (item.type === "bookmark") {
+    if (guardPlaneUnsupported("导航图书签定位")) return;
+    applyBookmark(item.bookmark);
+    return;
+  }
+  if (item.type === "device" && item.device) {
+    if (guardPlaneUnsupported("导航图设备定位")) return;
+    await locateDevice(item.device);
+  }
+}
+
 async function isolateDevice(
   item = selectedSceneDevice.value,
   withMessage = true
@@ -3836,6 +4183,62 @@ function handleNavTreeContextMenu(event, data) {
     setVisible: value => {
       ctxMenuVisible.value = value;
     }
+  });
+}
+
+function getCtxMenuSceneDevice() {
+  const node = ctxMenuNode.value;
+  if (!node) return null;
+  const raw = node.raw || node;
+  const uuid = String(raw.uuid || node.uuid || "").trim();
+  if (!uuid) return null;
+  return (
+    sceneDevices.value.find(item => item.uuid === uuid) || {
+      uuid,
+      name: raw.name || node.label || "当前构件",
+      path: raw.path || raw.name || node.label || "",
+      type: raw.type || node.type || "Mesh",
+      kks: raw.kks || "",
+      nodeId: raw.nodeId || node.nodeId || "",
+      systemName: raw.systemName || ""
+    }
+  );
+}
+
+async function onCtxViewObjectInfo() {
+  ctxMenuVisible.value = false;
+  const device = getCtxMenuSceneDevice();
+  if (!device?.uuid) {
+    message("当前节点不是构件节点，无法查看构件属性", {
+      type: "warning"
+    });
+    return;
+  }
+
+  selectedDeviceUuid.value = device.uuid;
+  syncNavigationSelections(device);
+  showObjectPanel.value = true;
+
+  const selected = viewerAdapter.selectObjectByUUID(device.uuid, {
+    emitEvent: true
+  });
+  if (selected) {
+    viewerAdapter.focusObjectsByUUIDs(getSceneDeviceUuids(device));
+    return;
+  }
+
+  await locateDevice(device, false);
+  const info = viewerAdapter.getSelectedObject?.();
+  if (info) {
+    runtimeStore.setSelectedObject(info);
+    showObjectPanel.value = true;
+    syncMeasurementPoints();
+    viewerAdapter.focusObjectsByUUIDs(getSceneDeviceUuids(device));
+    return;
+  }
+
+  message("当前构件无法查看属性，请确认模型已加载", {
+    type: "warning"
   });
 }
 
@@ -5239,6 +5642,7 @@ function handleViewerLoaded() {
   if (isPlaneRendering.value) {
     void refreshPlaneSnapshot({ force: true });
   }
+  void refreshNavigationSnapshot({ force: true });
 }
 
 function handleViewerClippingChange(payload) {
@@ -5586,6 +5990,25 @@ watch(
 );
 
 watch(
+  () => navigationSnapshotSignature.value,
+  () => {
+    navigationSnapshot.value = null;
+    void refreshNavigationSnapshot({ force: true });
+  }
+);
+
+watch(
+  () => sceneDevices.value.map(item => item.uuid).join("|"),
+  () => {
+    if (!viewerAdapter.isReady()) return;
+    rebuildNavigationObjectPositionMap();
+    if (!navigationSnapshot.value) {
+      void refreshNavigationSnapshot({ force: true });
+    }
+  }
+);
+
+watch(
   () => materialTheme.value,
   value => {
     syncViewerMaterialTheme({
@@ -5752,6 +6175,7 @@ onBeforeUnmount(() => {
           :clipping-direction-options="clippingDirectionOptions"
           :show-object-panel="showObjectPanel"
           :selected-scene-device="selectedSceneDevice"
+          :selected-device-profile="selectedDeviceProfile"
           :selected-kks-detail="selectedKksDetail"
           :selected-kks-detail-loading="selectedKksDetailLoading"
           :selected-kks-detail-error="selectedKksDetailError"
@@ -5834,6 +6258,11 @@ onBeforeUnmount(() => {
           :selected-quick-kks="selectedQuickKks"
           :scene-device-system-options="sceneDeviceSystemOptions"
           :scene-device-kks-options="sceneDeviceKksOptions"
+          :navigation-snapshot="navigationSnapshot"
+          :navigation-snapshot-loading="navigationSnapshotLoading"
+          :navigation-map-items="navigationMapItems"
+          :navigation-map-active-id="navigationMapActiveId"
+          :navigation-map-disabled="isPlaneRendering"
           :layer-tree-data="layerTreeData"
           :layer-checked-keys="layerCheckedKeys"
           :display-mode="displayMode"
@@ -5890,6 +6319,8 @@ onBeforeUnmount(() => {
           @navigation-node-contextmenu="handleNavTreeContextMenu"
           @update:selected-system-node-id="selectedSystemNodeId = $event"
           @update:selected-quick-kks="selectedQuickKks = $event"
+          @navigation-map-select="handleNavigationMapSelect"
+          @refresh-navigation-map="refreshNavigationSnapshot({ force: true })"
           @locate-system="locateSystem()"
           @locate-by-kks="locateByKks()"
           @apply-display-mode="applyDisplayMode"
@@ -6000,6 +6431,9 @@ onBeforeUnmount(() => {
           @contextmenu.prevent.stop
         >
           <template v-if="ctxMenuIsDevice">
+            <div class="dd-nav-ctx-item" @click.stop="onCtxViewObjectInfo">
+              查看构件属性
+            </div>
             <div class="dd-nav-ctx-item" @click.stop="onCtxBindProp">
               {{ ctxMenuNode?.raw?.kks ? "更换绑定" : "绑定业务数据" }}
             </div>

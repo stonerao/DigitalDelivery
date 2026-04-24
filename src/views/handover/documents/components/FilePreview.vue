@@ -36,6 +36,8 @@ const emit = defineEmits(["update:visible", "download"]);
 
 const previewUrl = ref("");
 const previewBlob = shallowRef(null);
+const previewLoading = ref(false);
+const previewError = ref("");
 const isFullscreen = ref(false);
 let revokeHandle = null;
 let loadToken = 0;
@@ -101,6 +103,8 @@ async function loadPreview() {
   const currentRowId = props.row?.id;
   if (!props.row) return;
 
+  previewLoading.value = true;
+  previewError.value = "";
   const controller = new AbortController();
   previewAbortController = controller;
   try {
@@ -122,8 +126,12 @@ async function loadPreview() {
     if (isAbortError(error)) return;
     if (currentToken === loadToken && !controller.signal.aborted) {
       previewUrl.value = "";
+      previewError.value = error?.message || "预览加载失败，请稍后重试";
     }
   } finally {
+    if (currentToken === loadToken && !controller.signal.aborted) {
+      previewLoading.value = false;
+    }
     if (previewAbortController === controller) {
       previewAbortController = null;
     }
@@ -140,6 +148,8 @@ function cleanup() {
   revokeHandle = null;
   previewBlob.value = null;
   previewUrl.value = "";
+  previewLoading.value = false;
+  previewError.value = "";
 }
 
 function close() {
@@ -238,11 +248,19 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="dd-file-preview-content">
+        <div v-if="previewLoading" class="dd-file-preview-loading">
+          <div class="dd-file-preview-loading__spinner" />
+          <div class="dd-file-preview-loading__title">正在加载中...</div>
+          <div class="dd-file-preview-loading__subtitle">
+            正在获取文档预览内容
+          </div>
+        </div>
+
         <div
-          v-if="!previewUrl"
+          v-else-if="previewError"
           class="dd-file-preview-empty text-[var(--el-text-color-secondary)]"
         >
-          当前文档只有元数据（演示）。接入后端存储后可在线预览。
+          {{ previewError }}
         </div>
 
         <PdfViewer
@@ -392,7 +410,39 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
+.dd-file-preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 240px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.dd-file-preview-loading__spinner {
+  width: 38px;
+  height: 38px;
+  border: 3px solid var(--el-fill-color-light);
+  border-top-color: var(--el-color-primary);
+  border-radius: 999px;
+  animation: dd-file-preview-spin 0.8s linear infinite;
+}
+
+.dd-file-preview-loading__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.dd-file-preview-loading__subtitle {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
 .dd-file-preview--fullscreen .dd-file-preview-empty,
+.dd-file-preview--fullscreen .dd-file-preview-loading,
 .dd-file-preview--fullscreen .dd-file-preview-renderer {
   flex: 1 1 auto;
   min-height: 0;
@@ -482,5 +532,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+@keyframes dd-file-preview-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
