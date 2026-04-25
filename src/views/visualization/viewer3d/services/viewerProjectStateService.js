@@ -142,10 +142,9 @@ export function resolveRestoredViewerProjectState({
       ),
       showStats: Boolean(savedRuntime.showStats),
       showSidePanel: savedRuntime.showSidePanel !== false,
-      activeSideTab:
-        String(savedRuntime.activeSideTab || "navigation") === "structure"
-          ? "navigation"
-          : String(savedRuntime.activeSideTab || "navigation"),
+      activeSideTab: String(
+        savedRuntime.activeSideTab || currentRuntime.activeSideTab || "scene"
+      ),
       transparent: Boolean(savedRuntime.transparentEnabled),
       pointMarkersVisible: savedRuntime.pointMarkersVisible !== false,
       anchorMarkersVisible: savedRuntime.anchorMarkersVisible !== false,

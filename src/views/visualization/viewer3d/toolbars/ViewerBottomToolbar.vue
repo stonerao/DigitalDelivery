@@ -458,7 +458,7 @@ function isDisplayActionActive(item) {
 <style scoped>
 .dd-bottombar {
   position: absolute;
-  bottom: 14px;
+  bottom: 16px;
   left: 50%;
   z-index: 30;
   transform: translateX(-50%);
@@ -470,13 +470,13 @@ function isDisplayActionActive(item) {
   gap: 6px;
   width: max-content;
   max-width: calc(100vw - 24px);
-  padding: 8px 10px;
+  padding: 8px;
   overflow: auto hidden;
   scrollbar-width: none;
-  background: var(--el-bg-color-overlay);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
-  box-shadow: var(--el-box-shadow-light);
+  background: rgb(255 255 255 / 88%);
+  border: 1px solid rgb(226 232 240 / 88%);
+  border-radius: 14px;
+  box-shadow: 0 18px 45px rgb(15 23 42 / 13%);
 }
 
 .dd-bottombar-shell::-webkit-scrollbar {
@@ -506,10 +506,14 @@ function isDisplayActionActive(item) {
   flex: none;
   gap: 4px;
   align-items: center;
-  padding: 4px;
-  background: var(--el-fill-color-extra-light);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  padding: 2px 8px;
+  background: transparent;
+  border-right: 1px solid #e5edf7;
+  border-radius: 0;
+}
+
+.dd-toolbar-group:last-child {
+  border-right: 0;
 }
 
 .dd-toolbar-btn {
@@ -521,13 +525,13 @@ function isDisplayActionActive(item) {
   height: 28px;
   padding: 0 8px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 650;
   line-height: 1;
-  color: var(--el-text-color-regular);
+  color: #334155;
   white-space: nowrap;
-  background: var(--el-bg-color);
+  background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -541,14 +545,15 @@ function isDisplayActionActive(item) {
 }
 
 .dd-toolbar-btn:hover {
-  background: var(--el-fill-color-light);
-  border-color: var(--el-border-color);
+  color: #0b73ff;
+  background: #f2f7ff;
+  border-color: #d7e8ff;
 }
 
 .dd-toolbar-btn.is-active {
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  border-color: var(--el-color-primary-light-5);
+  color: #0b73ff;
+  background: #edf5ff;
+  border-color: #b9d8ff;
   box-shadow: none;
 }
 
@@ -557,7 +562,8 @@ function isDisplayActionActive(item) {
 }
 
 .dd-toolbar-btn.is-static:hover {
-  background: var(--el-bg-color);
+  color: #334155;
+  background: transparent;
   border-color: transparent;
 }
 
@@ -584,19 +590,20 @@ function isDisplayActionActive(item) {
   flex: none;
   width: 5px;
   height: 5px;
-  background: var(--el-text-color-placeholder);
+  background: #94a3b8;
   border-radius: 999px;
 }
 
 .dd-toolbar-status.is-active .dd-toolbar-dot {
-  background: var(--el-color-success);
+  background: #19c37d;
+  box-shadow: 0 0 0 4px rgb(25 195 125 / 12%);
 }
 
 .dd-toolbar-hint {
   padding: 0 4px;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--el-text-color-secondary);
+  color: #64748b;
   white-space: nowrap;
 }
 

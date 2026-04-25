@@ -32,47 +32,141 @@ export class PerformanceMonitor {
     this.dom.className = "perf-monitor";
     Object.assign(this.dom.style, {
       position: "absolute",
-      top: "72px",
-      left: "12px",
+      top: "22px",
+      left: "22px",
       zIndex: "1200",
-      background: "rgba(0,0,0,0.75)",
-      color: "#0f0",
-      fontFamily: "monospace",
-      fontSize: "11px",
-      padding: "6px 10px",
-      borderRadius: "4px",
-      lineHeight: "1.5",
+      width: "224px",
+      background: "rgba(255,255,255,0.88)",
+      color: "#172033",
+      fontFamily:
+        "Inter, \"PingFang SC\", \"Microsoft YaHei\", Arial, sans-serif",
+      fontSize: "12px",
+      padding: "14px 16px 16px",
+      border: "1px solid rgba(226,232,240,0.88)",
+      borderRadius: "14px",
+      lineHeight: "1.4",
+      boxShadow: "0 18px 45px rgba(15,23,42,0.12)",
+      backdropFilter: "blur(16px) saturate(150%)",
       pointerEvents: "none",
       userSelect: "none"
     });
 
-    this.fpsText = document.createElement("div");
-    this.msText = document.createElement("div");
-    this.memText = document.createElement("div");
-    this.geoText = document.createElement("div");
+    const header = document.createElement("div");
+    Object.assign(header.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "12px",
+      marginBottom: "12px"
+    });
 
-    this.dom.appendChild(this.fpsText);
-    this.dom.appendChild(this.msText);
-    this.dom.appendChild(this.memText);
-    this.dom.appendChild(this.geoText);
+    const title = document.createElement("div");
+    title.textContent = "BIM 性能";
+    Object.assign(title.style, {
+      fontSize: "14px",
+      fontWeight: "760",
+      color: "#172033"
+    });
+
+    const status = document.createElement("div");
+    status.textContent = "在线";
+    Object.assign(status.style, {
+      height: "22px",
+      padding: "0 9px",
+      display: "inline-flex",
+      alignItems: "center",
+      color: "#08a362",
+      background: "#eafbf3",
+      border: "1px solid #b8ecd2",
+      borderRadius: "999px",
+      fontSize: "12px",
+      fontWeight: "700"
+    });
+
+    const bars = document.createElement("div");
+    Object.assign(bars.style, {
+      display: "inline-flex",
+      gap: "2px",
+      alignItems: "end",
+      marginLeft: "auto"
+    });
+    [8, 12, 16].forEach(height => {
+      const bar = document.createElement("span");
+      Object.assign(bar.style, {
+        width: "3px",
+        height: `${height}px`,
+        background: "#19c37d",
+        borderRadius: "999px"
+      });
+      bars.appendChild(bar);
+    });
+
+    header.appendChild(title);
+    header.appendChild(status);
+    header.appendChild(bars);
+
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid",
+      gap: "0",
+      borderTop: "1px solid rgba(226,232,240,0.9)"
+    });
+
+    const createMetric = label => {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        minHeight: "36px",
+        borderBottom: "1px solid rgba(226,232,240,0.86)"
+      });
+
+      const labelEl = document.createElement("span");
+      labelEl.textContent = label;
+      Object.assign(labelEl.style, {
+        color: "#334155",
+        fontWeight: "650"
+      });
+
+      const valueEl = document.createElement("span");
+      Object.assign(valueEl.style, {
+        color: "#0fb66d",
+        fontVariantNumeric: "tabular-nums",
+        fontWeight: "760"
+      });
+
+      row.appendChild(labelEl);
+      row.appendChild(valueEl);
+      grid.appendChild(row);
+      return valueEl;
+    };
+
+    this.fpsText = createMetric("FPS");
+    this.msText = createMetric("MS");
+    this.memText = createMetric("MEM");
+    this.geoText = createMetric("TRI / CALL");
+
+    this.dom.appendChild(header);
+    this.dom.appendChild(grid);
 
     this._updateDisplay();
   }
 
   _updateDisplay() {
     if (!this.dom) return;
-    this.fpsText.textContent = `FPS: ${this.fps}`;
-    this.msText.textContent = `MS: ${this.ms.toFixed(1)}`;
-    this.memText.textContent = `MEM: ${this.memory.toFixed(1)} MB`;
-    this.geoText.textContent = `TRI: ${formatNumber(this.triangles)} | CALL: ${this.drawCalls}`;
+    this.fpsText.textContent = String(this.fps);
+    this.msText.textContent = `${this.ms.toFixed(1)} ms`;
+    this.memText.textContent = `${this.memory.toFixed(1)} MB`;
+    this.geoText.textContent = `${formatNumber(this.triangles)} / ${this.drawCalls}`;
 
     // FPS 颜色指示
     if (this.fps >= 50) {
-      this.fpsText.style.color = "#0f0";
+      this.fpsText.style.color = "#0fb66d";
     } else if (this.fps >= 30) {
-      this.fpsText.style.color = "#ff0";
+      this.fpsText.style.color = "#d08700";
     } else {
-      this.fpsText.style.color = "#f00";
+      this.fpsText.style.color = "#dc2626";
     }
   }
 

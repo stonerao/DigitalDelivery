@@ -1,4 +1,16 @@
 <script setup>
+import { computed } from "vue";
+import {
+  Aim,
+  Camera,
+  CollectionTag,
+  Crop,
+  Pointer,
+  Position,
+  RefreshRight,
+  ScaleToOriginal,
+  View
+} from "@element-plus/icons-vue";
 import NavigationPanel from "../../panels/NavigationPanel.vue";
 import SceneSchemePanel from "../../panels/SceneSchemePanel.vue";
 import DevicePanel from "../../panels/DevicePanel.vue";
@@ -7,8 +19,9 @@ import MeasurementPanel from "../../panels/MeasurementPanel.vue";
 import AssetGroupPanel from "../../panels/AssetGroupPanel.vue";
 import RuntimeLinkagePanel from "../../panels/RuntimeLinkagePanel.vue";
 import StructurePanel from "../../panels/StructurePanel.vue";
+import SceneOverviewPanel from "../../panels/SceneOverviewPanel.vue";
 
-defineProps({
+const props = defineProps({
   showSidePanel: {
     type: Boolean,
     default: true
@@ -229,6 +242,10 @@ defineProps({
     type: Object,
     default: () => ({})
   },
+  clippingStats: {
+    type: Object,
+    default: () => ({})
+  },
   runtimeLogs: {
     type: Array,
     default: () => []
@@ -306,6 +323,28 @@ const emit = defineEmits([
   "clear-logs"
 ]);
 
+const panelTabs = [
+  { name: "scene", label: "场景", icon: View },
+  { name: "structure", label: "结构", icon: ScaleToOriginal },
+  { name: "navigation", label: "导航", icon: Position },
+  { name: "devices", label: "设备", icon: Aim },
+  { name: "anchors", label: "点位", icon: Pointer },
+  { name: "cameras", label: "摄像头", icon: Camera },
+  { name: "measurements", label: "测量", icon: Crop },
+  { name: "assets", label: "资产", icon: CollectionTag },
+  { name: "runtime", label: "联动", icon: RefreshRight }
+];
+
+const activePanelName = computed(() => {
+  return panelTabs.some(item => item.name === props.activeSideTab)
+    ? props.activeSideTab
+    : "scene";
+});
+
+function selectPanel(name) {
+  emit("update:activeSideTab", name);
+}
+
 function handleLayerTreeRefChange(instance) {
   emit("layer-tree-ref-change", instance || null);
 }
@@ -321,192 +360,211 @@ function handleNavigationNodeContextmenu(...args) {
 
 <template>
   <div v-show="showSidePanel" class="dd-side-panel">
-    <el-card shadow="never" class="h-full body-no-padding">
-      <el-tabs
-        :model-value="activeSideTab"
-        tab-position="right"
-        class="dd-side-tabs h-full"
-        @update:model-value="emit('update:activeSideTab', $event)"
+    <section class="dd-side-panel__content">
+      <SceneOverviewPanel
+        v-if="activePanelName === 'scene'"
+        :scene-models="sceneModels"
+        :scene-devices="filteredSceneDevices"
+        :anchors="anchors"
+        :camera-anchors="cameraAnchors"
+        :measurement-records="measurementRecords"
+        :runtime-asset-groups="runtimeAssetGroups"
+        :navigation-map-items="navigationMapItems"
+        :project-package="projectPackage"
+        :quality="quality"
+        :material-theme="materialTheme"
+        :display-mode-text="displayModeText"
+        :selected-lod-id="selectedLodId"
+        :lod-levels="lodLevels"
+        :selected-device-uuid="selectedDeviceUuid"
+        :realtime-state="realtimeState"
+        :script-state="scriptState"
+        :backend-state="backendState"
+        :clipping-stats="clippingStats"
+        @refresh-navigation-map="emit('refresh-navigation-map')"
+      />
+
+      <StructurePanel
+        v-else-if="activePanelName === 'structure'"
+        :ref="handleStructureTreeRefChange"
+        :scene-tree="sceneTree"
+        :tree-v2-props="treeV2Props"
+        :tree-default-expanded-keys="treeDefaultExpandedKeys"
+        :tree-filter-text="treeFilterText"
+        :model-type-filter="structureModelTypeFilter"
+        :model-type-options="structureModelTypeOptions"
+        :filter-method="structureFilterMethod"
+        :selected-tree-node="selectedTreeNode"
+        :binding-status-map="structureBindingMap"
+        :mesh-opacity="meshOpacity"
+        :active="activePanelName === 'structure'"
+        @refresh-tree="emit('refresh-tree')"
+        @update:tree-filter-text="emit('update:treeFilterText', $event)"
+        @update:model-type-filter="
+          emit('update:structureModelTypeFilter', $event)
+        "
+        @tree-node-click="emit('tree-node-click', $event)"
+        @tree-node-expand="emit('tree-node-expand', $event)"
+        @tree-node-collapse="emit('tree-node-collapse', $event)"
+        @focus-selected-node="emit('focus-selected-node')"
+        @make-selected-mesh-transparent="emit('make-selected-mesh-transparent')"
+        @restore-selected-mesh-opacity="emit('restore-selected-mesh-opacity')"
+        @isolate-selected-node="emit('isolate-selected-node')"
+        @show-all-objects="emit('show-all-objects')"
+        @hide-selected-node="emit('hide-selected-node')"
+        @restore-hidden-objects="emit('restore-hidden-objects')"
+        @update:mesh-opacity="emit('update:meshOpacity', $event)"
+      />
+
+      <div v-else-if="activePanelName === 'navigation'" class="dd-panel-stack">
+        <NavigationPanel
+          :ref="handleLayerTreeRefChange"
+          :navigation-tree-data="navigationTreeData"
+          :current-nav-node-key="currentNavNodeKey"
+          :selected-system-node-id="selectedSystemNodeId"
+          :selected-quick-kks="selectedQuickKks"
+          :scene-device-system-options="sceneDeviceSystemOptions"
+          :scene-device-kks-options="sceneDeviceKksOptions"
+          :navigation-snapshot="navigationSnapshot"
+          :navigation-snapshot-loading="navigationSnapshotLoading"
+          :navigation-map-items="navigationMapItems"
+          :navigation-map-active-id="navigationMapActiveId"
+          :navigation-map-disabled="navigationMapDisabled"
+          :layer-tree-data="layerTreeData"
+          :layer-checked-keys="layerCheckedKeys"
+          :display-mode="displayMode"
+          :display-mode-text="displayModeText"
+          @navigation-node-click="emit('navigation-node-click', $event)"
+          @navigation-node-contextmenu="handleNavigationNodeContextmenu"
+          @update:selected-system-node-id="
+            emit('update:selectedSystemNodeId', $event)
+          "
+          @update:selected-quick-kks="emit('update:selectedQuickKks', $event)"
+          @navigation-map-select="emit('navigation-map-select', $event)"
+          @refresh-navigation-map="emit('refresh-navigation-map')"
+          @locate-system="emit('locate-system')"
+          @locate-by-kks="emit('locate-by-kks')"
+          @apply-display-mode="emit('apply-display-mode', $event)"
+          @layer-tree-check="emit('layer-tree-check')"
+        />
+
+        <SceneSchemePanel
+          :scheme-name="schemeName"
+          :scene-schemes="sceneSchemes"
+          :format-scheme-time="formatSchemeTime"
+          @update:scheme-name="emit('update:schemeName', $event)"
+          @save-scheme="emit('save-scheme')"
+          @apply-scheme="emit('apply-scheme', $event)"
+          @remove-scheme="emit('remove-scheme', $event)"
+        />
+      </div>
+
+      <DevicePanel
+        v-else-if="activePanelName === 'devices'"
+        :device-keyword="deviceKeyword"
+        :filtered-scene-devices="filteredSceneDevices"
+        :selected-device-uuid="selectedDeviceUuid"
+        @update:device-keyword="emit('update:deviceKeyword', $event)"
+        @locate-device="emit('locate-device', $event)"
+        @isolate-device="emit('isolate-device', $event)"
+      />
+
+      <SceneAnchorPanel
+        v-else-if="activePanelName === 'anchors'"
+        title="场景点位"
+        kind="anchor"
+        :items="anchors"
+        :selected-id="selectedAnchorId"
+        :visible="anchorMarkersVisible"
+        empty-text="当前模型暂无点位"
+        @toggle-visible="emit('update:anchorMarkersVisible', $event)"
+        @add-item="emit('add-anchor')"
+        @select-item="emit('select-anchor', $event)"
+        @edit-item="emit('edit-anchor', $event)"
+        @remove-item="emit('remove-anchor', $event)"
+      />
+
+      <SceneAnchorPanel
+        v-else-if="activePanelName === 'cameras'"
+        title="摄像头点位"
+        kind="camera"
+        :items="cameraAnchors"
+        :selected-id="selectedCameraId"
+        :visible="cameraMarkersVisible"
+        empty-text="当前模型暂无摄像头点位"
+        @toggle-visible="emit('update:cameraMarkersVisible', $event)"
+        @add-item="emit('add-camera')"
+        @select-item="emit('select-camera', $event)"
+        @edit-item="emit('edit-camera', $event)"
+        @remove-item="emit('remove-camera', $event)"
+      />
+
+      <MeasurementPanel
+        v-else-if="activePanelName === 'measurements'"
+        :measurement-records="measurementRecords"
+        :measurement-mode="measurementMode"
+        :measurement-mode-options="measurementModeOptions"
+        @update:measurement-mode="emit('update:measurementMode', $event)"
+        @focus-record="emit('focus-record', $event)"
+        @toggle-record-visible="emit('toggle-record-visible', $event)"
+        @remove-record="emit('remove-record', $event)"
+        @clear-records="emit('clear-records')"
+        @export-records="emit('export-records')"
+      />
+
+      <AssetGroupPanel
+        v-else-if="activePanelName === 'assets'"
+        :scene-models="sceneModels"
+        :active-model-id="activeSceneModelId"
+        :groups="runtimeAssetGroups"
+        :project-package="projectPackage"
+        :available-model-options="selectableModelOptions"
+        :loading-model-options="loadingModelOptions"
+        :quality="quality"
+        :quality-options="qualityModeOptions"
+        :material-theme="materialTheme"
+        :lod-levels="lodLevels"
+        :active-lod-id="selectedLodId"
+        @add-model="emit('add-model')"
+        @select-model="emit('select-model', $event)"
+        @locate-model="emit('locate-model', $event)"
+        @remove-model="emit('remove-model', $event)"
+        @refresh-model-options="emit('refresh-model-options')"
+        @toggle-group="emit('toggle-group', $event)"
+        @update:quality="emit('update:quality', $event)"
+        @update:material-theme="emit('update:materialTheme', $event)"
+        @apply-lod="emit('apply-lod', $event)"
+        @clear-lod="emit('clear-lod')"
+      />
+
+      <RuntimeLinkagePanel
+        v-else-if="activePanelName === 'runtime'"
+        :realtime-state="realtimeState"
+        :script-state="scriptState"
+        :backend-state="backendState"
+        :runtime-logs="runtimeLogs"
+        @restart-realtime="emit('restart-realtime')"
+        @run-manual-trigger="emit('run-manual-trigger', $event)"
+        @send-backend-command="emit('send-backend-command', $event)"
+        @clear-logs="emit('clear-logs')"
+      />
+    </section>
+
+    <nav class="dd-side-panel__rail" aria-label="三维功能面板">
+      <button
+        v-for="item in panelTabs"
+        :key="item.name"
+        type="button"
+        class="dd-rail-item"
+        :class="{ 'is-active': activePanelName === item.name }"
+        @click="selectPanel(item.name)"
       >
-        <el-tab-pane label="结构" name="structure">
-          <StructurePanel
-            :ref="handleStructureTreeRefChange"
-            :scene-tree="sceneTree"
-            :tree-v2-props="treeV2Props"
-            :tree-default-expanded-keys="treeDefaultExpandedKeys"
-            :tree-filter-text="treeFilterText"
-            :model-type-filter="structureModelTypeFilter"
-            :model-type-options="structureModelTypeOptions"
-            :filter-method="structureFilterMethod"
-            :selected-tree-node="selectedTreeNode"
-            :binding-status-map="structureBindingMap"
-            :mesh-opacity="meshOpacity"
-            :active="activeSideTab === 'structure'"
-            @refresh-tree="emit('refresh-tree')"
-            @update:tree-filter-text="emit('update:treeFilterText', $event)"
-            @update:model-type-filter="
-              emit('update:structureModelTypeFilter', $event)
-            "
-            @tree-node-click="emit('tree-node-click', $event)"
-            @tree-node-expand="emit('tree-node-expand', $event)"
-            @tree-node-collapse="emit('tree-node-collapse', $event)"
-            @focus-selected-node="emit('focus-selected-node')"
-            @make-selected-mesh-transparent="
-              emit('make-selected-mesh-transparent')
-            "
-            @restore-selected-mesh-opacity="
-              emit('restore-selected-mesh-opacity')
-            "
-            @isolate-selected-node="emit('isolate-selected-node')"
-            @show-all-objects="emit('show-all-objects')"
-            @hide-selected-node="emit('hide-selected-node')"
-            @restore-hidden-objects="emit('restore-hidden-objects')"
-            @update:mesh-opacity="emit('update:meshOpacity', $event)"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="导航" name="navigation">
-          <NavigationPanel
-            :ref="handleLayerTreeRefChange"
-            :navigation-tree-data="navigationTreeData"
-            :current-nav-node-key="currentNavNodeKey"
-            :selected-system-node-id="selectedSystemNodeId"
-            :selected-quick-kks="selectedQuickKks"
-            :scene-device-system-options="sceneDeviceSystemOptions"
-            :scene-device-kks-options="sceneDeviceKksOptions"
-            :navigation-snapshot="navigationSnapshot"
-            :navigation-snapshot-loading="navigationSnapshotLoading"
-            :navigation-map-items="navigationMapItems"
-            :navigation-map-active-id="navigationMapActiveId"
-            :navigation-map-disabled="navigationMapDisabled"
-            :layer-tree-data="layerTreeData"
-            :layer-checked-keys="layerCheckedKeys"
-            :display-mode="displayMode"
-            :display-mode-text="displayModeText"
-            @navigation-node-click="emit('navigation-node-click', $event)"
-            @navigation-node-contextmenu="handleNavigationNodeContextmenu"
-            @update:selected-system-node-id="
-              emit('update:selectedSystemNodeId', $event)
-            "
-            @update:selected-quick-kks="emit('update:selectedQuickKks', $event)"
-            @navigation-map-select="emit('navigation-map-select', $event)"
-            @refresh-navigation-map="emit('refresh-navigation-map')"
-            @locate-system="emit('locate-system')"
-            @locate-by-kks="emit('locate-by-kks')"
-            @apply-display-mode="emit('apply-display-mode', $event)"
-            @layer-tree-check="emit('layer-tree-check')"
-          />
-
-          <div class="mt-3 px-1">
-            <SceneSchemePanel
-              :scheme-name="schemeName"
-              :scene-schemes="sceneSchemes"
-              :format-scheme-time="formatSchemeTime"
-              @update:scheme-name="emit('update:schemeName', $event)"
-              @save-scheme="emit('save-scheme')"
-              @apply-scheme="emit('apply-scheme', $event)"
-              @remove-scheme="emit('remove-scheme', $event)"
-            />
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="设备" name="devices">
-          <DevicePanel
-            :device-keyword="deviceKeyword"
-            :filtered-scene-devices="filteredSceneDevices"
-            :selected-device-uuid="selectedDeviceUuid"
-            @update:device-keyword="emit('update:deviceKeyword', $event)"
-            @locate-device="emit('locate-device', $event)"
-            @isolate-device="emit('isolate-device', $event)"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="点位" name="anchors">
-          <SceneAnchorPanel
-            title="场景点位"
-            kind="anchor"
-            :items="anchors"
-            :selected-id="selectedAnchorId"
-            :visible="anchorMarkersVisible"
-            empty-text="当前模型暂无点位"
-            @toggle-visible="emit('update:anchorMarkersVisible', $event)"
-            @add-item="emit('add-anchor')"
-            @select-item="emit('select-anchor', $event)"
-            @edit-item="emit('edit-anchor', $event)"
-            @remove-item="emit('remove-anchor', $event)"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="摄像头" name="cameras">
-          <SceneAnchorPanel
-            title="摄像头点位"
-            kind="camera"
-            :items="cameraAnchors"
-            :selected-id="selectedCameraId"
-            :visible="cameraMarkersVisible"
-            empty-text="当前模型暂无摄像头点位"
-            @toggle-visible="emit('update:cameraMarkersVisible', $event)"
-            @add-item="emit('add-camera')"
-            @select-item="emit('select-camera', $event)"
-            @edit-item="emit('edit-camera', $event)"
-            @remove-item="emit('remove-camera', $event)"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="测量" name="measurements">
-          <MeasurementPanel
-            :measurement-records="measurementRecords"
-            :measurement-mode="measurementMode"
-            :measurement-mode-options="measurementModeOptions"
-            @update:measurement-mode="emit('update:measurementMode', $event)"
-            @focus-record="emit('focus-record', $event)"
-            @toggle-record-visible="emit('toggle-record-visible', $event)"
-            @remove-record="emit('remove-record', $event)"
-            @clear-records="emit('clear-records')"
-            @export-records="emit('export-records')"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="资产" name="assets">
-          <AssetGroupPanel
-            :scene-models="sceneModels"
-            :active-model-id="activeSceneModelId"
-            :groups="runtimeAssetGroups"
-            :project-package="projectPackage"
-            :available-model-options="selectableModelOptions"
-            :loading-model-options="loadingModelOptions"
-            :quality="quality"
-            :quality-options="qualityModeOptions"
-            :material-theme="materialTheme"
-            :lod-levels="lodLevels"
-            :active-lod-id="selectedLodId"
-            @add-model="emit('add-model')"
-            @select-model="emit('select-model', $event)"
-            @locate-model="emit('locate-model', $event)"
-            @remove-model="emit('remove-model', $event)"
-            @refresh-model-options="emit('refresh-model-options')"
-            @toggle-group="emit('toggle-group', $event)"
-            @update:quality="emit('update:quality', $event)"
-            @update:material-theme="emit('update:materialTheme', $event)"
-            @apply-lod="emit('apply-lod', $event)"
-            @clear-lod="emit('clear-lod')"
-          />
-        </el-tab-pane>
-
-        <el-tab-pane label="联动" name="runtime">
-          <RuntimeLinkagePanel
-            :realtime-state="realtimeState"
-            :script-state="scriptState"
-            :backend-state="backendState"
-            :runtime-logs="runtimeLogs"
-            @restart-realtime="emit('restart-realtime')"
-            @run-manual-trigger="emit('run-manual-trigger', $event)"
-            @send-backend-command="emit('send-backend-command', $event)"
-            @clear-logs="emit('clear-logs')"
-          />
-        </el-tab-pane>
-      </el-tabs>
-    </el-card>
+        <el-icon class="dd-rail-item__icon">
+          <component :is="item.icon" />
+        </el-icon>
+        <span>{{ item.label }}</span>
+      </button>
+    </nav>
   </div>
 </template>
 
@@ -517,43 +575,126 @@ function handleNavigationNodeContextmenu(...args) {
   right: var(--dd-gap);
   bottom: var(--dd-bottom-reserve);
   z-index: 1100;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 62px;
+  gap: 10px;
   width: var(--dd-panel-width);
-  box-shadow: var(--el-box-shadow-light);
 }
 
-.dd-side-panel :deep(.el-card__body) {
-  box-sizing: border-box;
-  height: 100%;
-  padding: 20px 0 20px 20px;
+.dd-side-panel__content,
+.dd-side-panel__rail {
+  background: rgb(255 255 255 / 84%);
+  border: 1px solid rgb(226 232 240 / 82%);
+  box-shadow: 0 20px 55px rgb(15 23 42 / 12%);
+  backdrop-filter: blur(18px) saturate(150%);
 }
 
-.dd-side-tabs :deep(.el-tabs__content) {
+.dd-side-panel__content {
+  min-width: 0;
   height: 100%;
-  padding-right: 12px;
+  padding: 16px;
   overflow: hidden auto;
+  border-radius: 15px;
 }
 
-.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar) {
+.dd-side-panel__content::-webkit-scrollbar {
   width: 4px;
 }
 
-.dd-side-tabs :deep(.el-tabs__content::-webkit-scrollbar-thumb) {
-  background: var(--el-border-color-dark);
-  border-radius: 4px;
+.dd-side-panel__content::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 64%);
+  border-radius: 999px;
 }
 
-.dd-side-tabs.el-tabs--right :deep(.el-tabs__item) {
-  height: auto !important;
-  padding: 16px 8px !important;
-  letter-spacing: 4px;
-  writing-mode: vertical-rl;
+.dd-side-panel__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: max-content;
+  max-height: 100%;
+  padding: 8px 6px;
+  overflow: hidden auto;
+  border-radius: 14px;
 }
 
-.dd-side-tabs.el-tabs--right :deep(.el-tabs__item.is-active) {
-  font-weight: bold;
+.dd-side-panel__rail::-webkit-scrollbar {
+  width: 0;
 }
 
-.dd-side-tabs :deep(.el-tab-pane) {
-  height: 100%;
+.dd-rail-item {
+  display: grid;
+  gap: 6px;
+  place-items: center;
+  min-height: 62px;
+  padding: 8px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: #415169;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.dd-rail-item:hover {
+  color: #0b73ff;
+  background: #f2f7ff;
+}
+
+.dd-rail-item.is-active {
+  color: #0b73ff;
+  background: linear-gradient(180deg, #edf5ff, #f7fbff);
+  box-shadow: inset 0 0 0 1px #d7e8ff;
+}
+
+.dd-rail-item__icon {
+  font-size: 18px;
+}
+
+.dd-panel-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.dd-side-panel__content :deep(.el-card) {
+  background: rgb(255 255 255 / 74%);
+  border-color: rgb(226 232 240 / 88%);
+  border-radius: 14px;
+}
+
+.dd-side-panel__content :deep(.el-card__header) {
+  padding: 14px 16px;
+  border-bottom-color: rgb(226 232 240 / 82%);
+}
+
+.dd-side-panel__content :deep(.el-card__body) {
+  padding: 16px;
+}
+
+@media (width <= 1200px) {
+  .dd-side-panel {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(420px, calc(100vw - 24px));
+  }
+
+  .dd-side-panel__rail {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    flex-direction: row;
+    height: auto;
+    padding: 6px;
+  }
+
+  .dd-rail-item {
+    flex: 1 0 58px;
+    min-height: 52px;
+  }
 }
 </style>

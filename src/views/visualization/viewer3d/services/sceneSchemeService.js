@@ -86,7 +86,7 @@ export function buildCurrentSceneSchemePayload({
     displayMode,
     selectedSystemNodeId: selectedSystemNodeId || "",
     selectedQuickKks: selectedQuickKks || "",
-    activeRightTab: activeRightTab || "navigation",
+    activeRightTab: activeRightTab || "scene",
     pointMarkersVisible: pointMarkersVisible !== false,
     visibleDeviceRefs: visibleRefs,
     clippingState: clippingState || null

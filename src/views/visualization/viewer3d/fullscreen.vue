@@ -2580,7 +2580,7 @@ function applySceneScheme(scheme) {
   });
   selectedSystemNodeId.value = scheme.selectedSystemNodeId || "";
   selectedQuickKks.value = scheme.selectedQuickKks || "";
-  activeSideTab.value = scheme.activeRightTab || "navigation";
+  activeSideTab.value = scheme.activeRightTab || "scene";
   pointMarkersVisible.value = scheme.pointMarkersVisible !== false;
 
   if (
@@ -6527,6 +6527,7 @@ onBeforeUnmount(() => {
           :realtime-state="realtimeState"
           :script-state="scriptState"
           :backend-state="backendState"
+          :clipping-stats="clippingStats"
           :runtime-logs="runtimeLogs"
           :format-scheme-time="formatSchemeTime"
           @structure-tree-ref-change="handleStructureTreeRefChange"
@@ -6891,33 +6892,41 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dd-fullscreen {
-  --dd-gap: 12px;
+  --dd-gap: 16px;
   --dd-topbar-height: 52px;
-  --dd-panels-top: 64px;
-  --dd-bottom-reserve: 120px;
-  --dd-panel-width: 420px; /* 原本360px，由于增加了垂直标签栏，拓宽以防止内容挤压 */
+  --dd-panels-top: 68px;
+  --dd-bottom-reserve: 92px;
+  --dd-panel-width: 430px;
 
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  background: var(--el-bg-color);
+  background:
+    radial-gradient(circle at 38% 30%, rgb(37 99 235 / 8%), transparent 34%),
+    linear-gradient(135deg, #f9fbff 0%, #eef4fb 52%, #f8fbff 100%);
 }
 
 .dd-topbar {
   display: flex;
-  gap: 12px;
   align-items: center;
+  justify-content: space-between;
   height: 52px;
-  padding: 0 16px;
-  background: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color-light);
+  padding: 0 18px;
+  background: rgb(255 255 255 / 86%);
+  border-bottom: 1px solid rgb(226 232 240 / 88%);
+  box-shadow: 0 8px 28px rgb(15 23 42 / 7%);
+  backdrop-filter: blur(18px) saturate(160%);
 }
 
 .dd-canvas {
   flex: 1;
   overflow: hidden;
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 3%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 3%) 1px, transparent 1px);
+  background-size: 48px 48px;
 }
 
 .dd-canvas-context-toolbar {

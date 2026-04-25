@@ -4311,7 +4311,7 @@ const loadingSubtitle = computed(() => {
   <div class="relative h-full w-full">
     <div ref="rootRef" class="h-full w-full rounded overflow-hidden" />
 
-    <div class="absolute left-3 top-3 flex flex-col gap-2">
+    <div v-if="!showStats" class="dd-viewer-status-stack">
       <el-tag effect="light" size="small">格式：{{ modelTypeText }}</el-tag>
       <el-tag v-if="loading" type="primary" effect="light" size="small">
         加载中{{ loadProgress > 0 ? ` ${loadProgress}%` : "..." }}
@@ -4373,6 +4373,27 @@ const loadingSubtitle = computed(() => {
 </template>
 
 <style scoped>
+.dd-viewer-status-stack {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dd-viewer-status-stack :deep(.el-tag) {
+  height: 26px;
+  padding: 0 10px;
+  font-weight: 700;
+  background: rgb(255 255 255 / 82%);
+  border-color: rgb(226 232 240 / 88%);
+  border-radius: 9px;
+  box-shadow: 0 10px 22px rgb(15 23 42 / 8%);
+  backdrop-filter: blur(12px);
+}
+
 .dd-model-loading {
   position: absolute;
   inset: 0;

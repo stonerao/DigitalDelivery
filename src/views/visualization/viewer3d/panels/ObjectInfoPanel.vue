@@ -86,7 +86,7 @@ const hasDeviceRunning = computed(
 
 <template>
   <div v-show="visible" class="dd-object-panel">
-    <el-card shadow="never" class="h-full">
+    <el-card shadow="never" class="dd-object-panel__card h-full">
       <template #header>
         <div class="flex items-center justify-between">
           <span class="font-semibold text-sm">构件属性</span>
@@ -455,9 +455,42 @@ const hasDeviceRunning = computed(
   bottom: var(--dd-bottom-reserve);
   left: var(--dd-gap);
   z-index: 1200;
-  width: var(--dd-panel-width);
+  width: min(420px, calc(100vw - 32px));
   max-height: 58vh;
   overflow: auto;
-  box-shadow: var(--el-box-shadow-light);
+  border-radius: 15px;
+  box-shadow: 0 20px 55px rgb(15 23 42 / 13%);
+}
+
+.dd-object-panel__card {
+  background: rgb(255 255 255 / 88%);
+  border-color: rgb(226 232 240 / 88%);
+  border-radius: 15px;
+  backdrop-filter: blur(18px) saturate(150%);
+}
+
+.dd-object-panel :deep(.el-card__header) {
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgb(248 251 255 / 92%), transparent);
+  border-bottom-color: rgb(226 232 240 / 84%);
+}
+
+.dd-object-panel :deep(.el-card__body) {
+  padding: 16px;
+}
+
+.dd-object-panel :deep(.el-card .el-card) {
+  background: rgb(255 255 255 / 72%);
+  border-color: rgb(226 232 240 / 82%);
+  border-radius: 14px;
+}
+
+.dd-object-panel :deep(.el-descriptions__label) {
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.dd-object-panel :deep(.el-descriptions__content) {
+  color: #172033;
 }
 </style>

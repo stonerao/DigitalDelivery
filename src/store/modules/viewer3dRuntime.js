@@ -21,7 +21,7 @@ function getInitialState() {
     showSidePanel: true,
     showStats: false,
     showObjectPanel: false,
-    activeSideTab: "navigation",
+    activeSideTab: "scene",
     displayMode: "all",
     transparentEnabled: false,
     clippingEnabled: false,
@@ -127,7 +127,7 @@ export const useViewer3dRuntimeStore = defineStore("viewer3d-runtime", {
       this.showObjectPanel = Boolean(value);
     },
     setActiveSideTab(value) {
-      this.activeSideTab = value || "navigation";
+      this.activeSideTab = value || "scene";
     },
     setDisplayMode(value) {
       this.displayMode = value || "all";

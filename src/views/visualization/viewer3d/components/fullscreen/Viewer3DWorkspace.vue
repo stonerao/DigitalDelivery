@@ -1,5 +1,13 @@
 <script setup>
 import { ref, watch } from "vue";
+import {
+  Aim,
+  Camera,
+  ScaleToOriginal,
+  View,
+  ZoomIn,
+  ZoomOut
+} from "@element-plus/icons-vue";
 import { ThreeModelViewer } from "@/3d";
 import ViewerBottomToolbar from "../../toolbars/ViewerBottomToolbar.vue";
 import ClippingPanel from "../../panels/ClippingPanel.vue";
@@ -256,6 +264,32 @@ watch(
       @clipping-change="emit('clipping-change', $event)"
     />
 
+    <div
+      class="dd-canvas-quickbar"
+      :class="{ 'is-panel-hidden': !showSidePanel }"
+      aria-label="画布快捷操作"
+    >
+      <button type="button" title="重置视角" @click="emit('reset-view')">
+        <el-icon><Aim /></el-icon>
+      </button>
+      <button type="button" title="视图切换" @click="emit('toggle-projection')">
+        <el-icon><View /></el-icon>
+      </button>
+      <button type="button" title="适配视图" @click="emit('reset-view')">
+        <el-icon><ScaleToOriginal /></el-icon>
+      </button>
+      <span class="dd-canvas-quickbar__divider" />
+      <button type="button" title="放大" @click="emit('zoom-in')">
+        <el-icon><ZoomIn /></el-icon>
+      </button>
+      <button type="button" title="缩小" @click="emit('zoom-out')">
+        <el-icon><ZoomOut /></el-icon>
+      </button>
+      <button type="button" title="截图" @click="emit('take-screenshot')">
+        <el-icon><Camera /></el-icon>
+      </button>
+    </div>
+
     <ViewerBottomToolbar
       :tool-options="toolOptions"
       :active-tool="activeTool"
@@ -335,3 +369,58 @@ watch(
     />
   </div>
 </template>
+
+<style scoped>
+.dd-canvas-quickbar {
+  position: absolute;
+  top: 22px;
+  right: calc(var(--dd-panel-width) + var(--dd-gap) + 20px);
+  z-index: 35;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  pointer-events: auto;
+  background: rgb(255 255 255 / 86%);
+  border: 1px solid rgb(226 232 240 / 88%);
+  border-radius: 14px;
+  box-shadow: 0 18px 45px rgb(15 23 42 / 12%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+
+.dd-canvas-quickbar button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: #334155;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.dd-canvas-quickbar button:hover {
+  color: #0b73ff;
+  background: #edf5ff;
+}
+
+.dd-canvas-quickbar__divider {
+  height: 1px;
+  margin: 2px 4px;
+  background: #e5edf7;
+}
+
+.dd-canvas-quickbar.is-panel-hidden {
+  right: 18px;
+}
+
+@media (width <= 1200px) {
+  .dd-canvas-quickbar {
+    right: 18px;
+  }
+}
+</style>
