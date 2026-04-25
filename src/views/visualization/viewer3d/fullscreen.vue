@@ -125,10 +125,15 @@ import {
   normalizeAnchorStyle,
   normalizeAnchorForm,
   normalizeCameraForm,
+  pickAnchorIconStyle,
   removeItem,
   summarizeAnchorBinding,
   upsertItem
 } from "./services/sceneAnchorService";
+import {
+  CAMERA_ANCHOR_ICON_OPTIONS,
+  SCENE_ANCHOR_ICON_OPTIONS
+} from "./services/sceneAnchorIconService";
 import {
   exportSceneAnchorExcel,
   exportSceneAnchorJson,
@@ -219,6 +224,7 @@ const realtimeAdapter = createRealtimeDataAdapter({
       lastPacket: packet,
       lastPacketAt: packet.timestamp
     });
+    applyRealtimeDeviceStatusPacket(packet);
   },
   onLog: pushRuntimeLog,
   onStateChange: payload => runtimeStore.setRealtimeState(payload)
@@ -1201,22 +1207,52 @@ async function initializeRouteSceneModel(modelId) {
   syncActiveModelDetail();
 }
 
-const loadedModelOptions = computed(() =>
-  sceneModels.value.map(item => ({
-    label: item.modelName,
-    value: item.modelId
-  }))
-);
-
 const selectableModelOptions = computed(() => {
-  const loadedIds = new Set(sceneModels.value.map(item => item.modelId));
-  return availableModels.value
-    .filter(item => !loadedIds.has(item.id))
-    .map(item => ({
+  const loadedModelMap = new Map(
+    sceneModels.value.map(item => [String(item.modelId || ""), item])
+  );
+  const optionMap = new Map();
+
+  availableModels.value.forEach(item => {
+    const id = String(item.id || "").trim();
+    if (!id) return;
+    const loadedModel = loadedModelMap.get(id);
+    optionMap.set(id, {
       label: item.name,
-      value: item.id,
-      raw: item
-    }));
+      value: id,
+      raw: item,
+      loaded: Boolean(loadedModel),
+      active: activeSceneModelId.value === id,
+      disabled: Boolean(loadedModel)
+    });
+  });
+
+  sceneModels.value.forEach(item => {
+    const id = String(item.modelId || "").trim();
+    if (!id || optionMap.has(id)) return;
+    optionMap.set(id, {
+      label: item.modelName || id,
+      value: id,
+      raw: item.rawDetail || {
+        id,
+        name: item.modelName || id,
+        lod: item.metadata?.lod || "LOD300",
+        updatedAt: item.rawDetail?.updatedAt || "-"
+      },
+      loaded: true,
+      active: activeSceneModelId.value === id,
+      disabled: true
+    });
+  });
+
+  return Array.from(optionMap.values()).sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    if (a.loaded !== b.loaded) return a.loaded ? -1 : 1;
+    return String(a.label || "").localeCompare(
+      String(b.label || ""),
+      "zh-Hans"
+    );
+  });
 });
 
 const viewerSceneModels = computed(() =>
@@ -1289,6 +1325,9 @@ function refreshModelOptionsFromPanel() {
 
 const sceneManifest = computed(
   () => projectStore.projectPackage?.assets?.sceneManifest || {}
+);
+const currentProjectPackage = computed(
+  () => projectStore.projectPackage || null
 );
 const assetGroups = ref([]);
 const selectedLodId = ref("");
@@ -1587,10 +1626,24 @@ const anchorBindingTypeOptions = ANCHOR_BINDING_TYPE_OPTIONS;
 const cameraTypeOptions = CAMERA_TYPE_OPTIONS;
 const cameraStreamTypeOptions = CAMERA_STREAM_TYPE_OPTIONS;
 const cameraWindowModeOptions = CAMERA_WINDOW_MODE_OPTIONS;
+const anchorIconOptions = SCENE_ANCHOR_ICON_OPTIONS;
+const cameraIconOptions = CAMERA_ANCHOR_ICON_OPTIONS;
 
 function getAnchorStyleDefault(kind = "anchor") {
   const type = kind === "camera" ? "camera-point" : "measurement-point";
   return normalizeAnchorStyle(anchorStyleDefaults.value?.[kind] || {}, type);
+}
+
+function getMergedAnchorStyle(kind = "anchor", item = {}) {
+  const type =
+    kind === "camera" ? "camera-point" : item.type || "measurement-point";
+  return normalizeAnchorStyle(
+    {
+      ...getAnchorStyleDefault(kind),
+      ...(item.style || {})
+    },
+    type
+  );
 }
 
 function buildStyledAnchorForm(
@@ -1598,7 +1651,6 @@ function buildStyledAnchorForm(
   payload = {},
   selectedObject = null
 ) {
-  const defaultStyle = getAnchorStyleDefault(kind);
   const form =
     kind === "camera"
       ? payload && Object.keys(payload).length
@@ -1608,10 +1660,7 @@ function buildStyledAnchorForm(
         ? normalizeAnchorForm(payload)
         : createEmptyAnchorForm(selectedObject);
 
-  form.style = normalizeAnchorStyle(
-    defaultStyle,
-    kind === "camera" ? "camera-point" : form.type || "measurement-point"
-  );
+  form.style = pickAnchorIconStyle(payload?.style || form.style) || {};
   return form;
 }
 
@@ -1797,6 +1846,97 @@ const filteredSceneDevices = computed(() => {
     );
   });
 });
+
+const DEVICE_STATUS_COLOR_CONFIG = Object.freeze({
+  alarm: "#ef4444",
+  warning: "#f59e0b",
+  offline: "#64748b"
+});
+
+function getDeviceStatusLevel(status = "") {
+  const text = String(status || "")
+    .trim()
+    .toLowerCase();
+  if (!text || text === "-") return "";
+  if (
+    ["alarm", "danger", "error", "fault", "告警", "报警", "异常", "故障"].some(
+      item => text.includes(item)
+    )
+  ) {
+    return "alarm";
+  }
+  if (
+    ["warning", "warn", "risk", "预警", "警告", "风险"].some(item =>
+      text.includes(item)
+    )
+  ) {
+    return "warning";
+  }
+  if (
+    ["offline", "disconnect", "stopped", "离线", "断线", "停机", "停运"].some(
+      item => text.includes(item)
+    )
+  ) {
+    return "offline";
+  }
+  return "";
+}
+
+function getDeviceStatusColor(status = "") {
+  return DEVICE_STATUS_COLOR_CONFIG[getDeviceStatusLevel(status)] || "";
+}
+
+const structureBindingMap = computed(() => {
+  const map = {};
+  sceneDevices.value.forEach(device => {
+    const kks = String(device?.kks || "").trim();
+    const status = {
+      kks,
+      state: String(device?.status || "").trim(),
+      documentCount: Array.isArray(device?.boundDocuments)
+        ? device.boundDocuments.length
+        : 0,
+      measurementCount: kks ? ddStore.getMeasurementPointsByKks(kks).length : 0
+    };
+    [
+      device?.uuid,
+      ...(Array.isArray(device?.meshUuids) ? device.meshUuids : [])
+    ]
+      .map(uuid => String(uuid || "").trim())
+      .filter(Boolean)
+      .forEach(uuid => {
+        map[uuid] = status;
+      });
+  });
+  return map;
+});
+
+const sceneDeviceStatusColorEntries = computed(() => {
+  return sceneDevices.value
+    .map(device => {
+      const color = getDeviceStatusColor(device?.status);
+      if (!color) return null;
+      const uuids = getSceneDeviceUuids(device);
+      if (!uuids.length) return null;
+      return {
+        uuids,
+        color,
+        opacity: 1,
+        status: String(device?.status || ""),
+        kks: String(device?.kks || "")
+      };
+    })
+    .filter(Boolean);
+});
+
+const sceneDeviceStatusColorSignature = computed(() =>
+  sceneDeviceStatusColorEntries.value
+    .map(
+      item =>
+        `${item.uuids.join(",")}:${item.color}:${item.opacity}:${item.status}`
+    )
+    .join("|")
+);
 
 const sceneDeviceSystemOptions = computed(() => {
   const grouped = new Map();
@@ -2053,10 +2193,7 @@ const renderableAnchors = computed(() => {
     getNodeLabel: nodeId => getSystemNodeLabel(nodeId)
   }).map(item => ({
     ...item,
-    style: normalizeAnchorStyle(
-      getAnchorStyleDefault("anchor"),
-      item.type || "measurement-point"
-    )
+    style: getMergedAnchorStyle("anchor", item)
   }));
 });
 
@@ -2085,7 +2222,7 @@ const renderableCameraAnchors = computed(() => {
     getNodeLabel: nodeId => getSystemNodeLabel(nodeId)
   }).map(item => ({
     ...item,
-    style: normalizeAnchorStyle(getAnchorStyleDefault("camera"), "camera-point")
+    style: getMergedAnchorStyle("camera", item)
   }));
 });
 
@@ -2488,10 +2625,17 @@ function formatSchemeTime(value) {
   return formatSceneSchemeTime(value);
 }
 
+function serializeAnchorForPersistence(item = {}) {
+  return {
+    ...item,
+    style: pickAnchorIconStyle(item.style)
+  };
+}
+
 function persistSceneAnchorData() {
   patchSceneProjectPackage({
-    anchors: anchors.value,
-    cameras: cameraAnchors.value,
+    anchors: anchors.value.map(serializeAnchorForPersistence),
+    cameras: cameraAnchors.value.map(serializeAnchorForPersistence),
     clipping: projectClippingState.value,
     anchorStyleDefaults: anchorStyleDefaults.value
   });
@@ -2544,8 +2688,8 @@ function buildProjectInfoPayload() {
       bindings: {
         objectBindings: serializedObjectBindings
       },
-      anchors: anchors.value,
-      cameras: cameraAnchors.value,
+      anchors: anchors.value.map(serializeAnchorForPersistence),
+      cameras: cameraAnchors.value.map(serializeAnchorForPersistence),
       anchorStyleDefaults: anchorStyleDefaults.value,
       measurements: measurementRecords.value,
       schemes: sceneSchemes.value,
@@ -2614,8 +2758,8 @@ function buildProjectInfoPayload() {
           ...(projectStore.projectPackage?.scene?.bindings || {}),
           objectBindings: serializedObjectBindings
         },
-        anchors: anchors.value,
-        cameras: cameraAnchors.value,
+        anchors: anchors.value.map(serializeAnchorForPersistence),
+        cameras: cameraAnchors.value.map(serializeAnchorForPersistence),
         measurements: measurementRecords.value,
         schemes: sceneSchemes.value,
         bookmarks: bookmarks.value,
@@ -2636,6 +2780,9 @@ function buildProjectInfoPayload() {
       integrations: {
         realtime: integrationConfigs.value?.realtime || {},
         backendBridge: integrationConfigs.value?.backendBridge || {}
+      },
+      extensions: {
+        ...(projectStore.projectPackage?.extensions || {})
       },
       updatedAt: Date.now()
     }
@@ -2729,6 +2876,18 @@ function createScopedProjectPackage(scope, rawPackage = null) {
     integrations: {
       ...basePackage.integrations,
       ...(parsedPackage.integrations || {})
+    },
+    extensions: {
+      ...basePackage.extensions,
+      ...(parsedPackage.extensions || {}),
+      schedule4d: {
+        ...(basePackage.extensions?.schedule4d || {}),
+        ...(parsedPackage.extensions?.schedule4d || {})
+      },
+      cost5d: {
+        ...(basePackage.extensions?.cost5d || {}),
+        ...(parsedPackage.extensions?.cost5d || {})
+      }
     }
   };
 }
@@ -2957,6 +3116,53 @@ function setMaterialTheme(theme) {
   const nextTheme = theme || "original";
   runtimeStore.setMaterialTheme(nextTheme);
   viewerAdapter.setMaterialTheme(nextTheme);
+}
+
+function syncSceneDeviceStatusColors() {
+  if (!viewerAdapter.isReady()) return;
+  if (!sceneDeviceStatusColorEntries.value.length) {
+    viewerAdapter.clearObjectStatusColors?.();
+    return;
+  }
+  viewerAdapter.setObjectStatusColors?.(sceneDeviceStatusColorEntries.value);
+}
+
+function applyRealtimeDeviceStatusPacket(packet = {}) {
+  const status = String(
+    packet?.status || (packet?.type === "device-status" ? packet?.value : "")
+  ).trim();
+  if (!status) return;
+
+  const targetUuid = String(
+    packet?.targetUuid || packet?.objectUuid || packet?.uuid || ""
+  ).trim();
+  const targetKks = String(packet?.kks || "").trim();
+  if (!targetUuid && !targetKks) return;
+
+  let changed = false;
+  const nextDevices = sceneDevices.value.map(item => {
+    const uuids = Array.from(
+      new Set([item?.uuid, ...getSceneDeviceUuids(item)].filter(Boolean))
+    );
+    const matchedByUuid = targetUuid && uuids.includes(targetUuid);
+    const matchedByKks =
+      targetKks &&
+      String(item?.kks || "")
+        .trim()
+        .toLowerCase() === targetKks.toLowerCase();
+    if (!matchedByUuid && !matchedByKks) return item;
+    if (item.status === status) return item;
+    changed = true;
+    return {
+      ...item,
+      status,
+      statusUpdatedAt: packet?.timestamp || Date.now()
+    };
+  });
+
+  if (!changed) return;
+  sceneDevices.value = nextDevices;
+  projectStore.setSceneDevices(nextDevices);
 }
 
 function setRuntimeDisplayMode(mode) {
@@ -3219,7 +3425,7 @@ function submitAnchorDialog() {
     kind === "camera"
       ? normalizeCameraForm(anchorForm.value)
       : normalizeAnchorForm(anchorForm.value);
-  normalized.style = undefined;
+  normalized.style = pickAnchorIconStyle(anchorForm.value?.style);
 
   if (!validateAnchorForm(normalized, kind)) return;
 
@@ -5639,6 +5845,9 @@ function handleViewerLoaded() {
     clippingAnimationAxis: clippingAnimationAxis.value,
     syncRuntimeServices
   });
+  nextTick(() => {
+    syncSceneDeviceStatusColors();
+  });
   if (isPlaneRendering.value) {
     void refreshPlaneSnapshot({ force: true });
   }
@@ -6019,6 +6228,25 @@ watch(
 );
 
 watch(
+  () => [
+    sceneDeviceStatusColorSignature.value,
+    quality.value,
+    materialTheme.value,
+    modelUrl.value,
+    isPlaneRendering.value
+  ],
+  async () => {
+    await nextTick();
+    if (isPlaneRendering.value) {
+      viewerAdapter.clearObjectStatusColors?.();
+      return;
+    }
+    syncSceneDeviceStatusColors();
+  },
+  { immediate: true }
+);
+
+watch(
   () => [renderableAnchors.value, anchorMarkersVisible.value],
   () => {
     syncSceneAnchorsOnWatcher({
@@ -6222,6 +6450,9 @@ onBeforeUnmount(() => {
           @reset-clipping="resetClipping"
           @close-object-panel="closeObjectPanel"
           @update:point-markers-visible="pointMarkersVisible = $event"
+          @document-detail="openBoundDocumentDetail"
+          @document-preview="openBoundDocumentPreview"
+          @document-download="downloadBoundDocument"
         />
 
         <ViewerPlaneWorkspace
@@ -6251,6 +6482,7 @@ onBeforeUnmount(() => {
           :structure-model-type-options="structureModelTypeOptions"
           :structure-filter-method="structureFilterMethod"
           :selected-tree-node="selectedTreeNode"
+          :structure-binding-map="structureBindingMap"
           :mesh-opacity="meshOpacity"
           :navigation-tree-data="navigationTreeData"
           :current-nav-node-key="currentNavNodeKey"
@@ -6284,6 +6516,7 @@ onBeforeUnmount(() => {
           :scene-models="sceneModels"
           :active-scene-model-id="activeSceneModelId"
           :runtime-asset-groups="runtimeAssetGroups"
+          :project-package="currentProjectPackage"
           :selectable-model-options="selectableModelOptions"
           :loading-model-options="loadingModelOptions"
           :quality="quality"
@@ -6625,6 +6858,8 @@ onBeforeUnmount(() => {
           :camera-stream-type-options="cameraStreamTypeOptions"
           :camera-window-mode-options="cameraWindowModeOptions"
           :anchor-binding-type-options="anchorBindingTypeOptions"
+          :anchor-icon-options="anchorIconOptions"
+          :camera-icon-options="cameraIconOptions"
           :position-picking-active="positionPickingState.active"
           :picked-position-text="pickedPositionText"
           @closed="handleAnchorDialogClosed"

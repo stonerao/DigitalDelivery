@@ -61,6 +61,8 @@ export function createViewerAdapter() {
     clearHiddenUUIDs: () => invoke("clearHiddenUUIDs"),
     setMeshOpacityByUUID: (uuid, opacity) =>
       invoke("setMeshOpacityByUUID", uuid, opacity),
+    setObjectStatusColors: entries => invoke("setObjectStatusColors", entries),
+    clearObjectStatusColors: () => invoke("clearObjectStatusColors"),
     toggleFirstPerson: force => invoke("toggleFirstPerson", force),
     getFirstPersonState: () => Boolean(getExposeValue(viewer?.isFirstPerson)),
     setClippingState: state => invoke("setClippingState", state),
@@ -114,7 +116,8 @@ export function createViewerAdapter() {
       measurements: ["distance", "polyline", "angle", "area"],
       bookmarks: true,
       anchors: true,
-      cameraOverlay: true
+      cameraOverlay: true,
+      statusColoring: true
     })
   };
 }

@@ -49,6 +49,10 @@ defineProps({
     type: Object,
     default: null
   },
+  structureBindingMap: {
+    type: Object,
+    default: () => ({})
+  },
   meshOpacity: {
     type: Number,
     default: 0.2
@@ -180,6 +184,10 @@ defineProps({
   runtimeAssetGroups: {
     type: Array,
     default: () => []
+  },
+  projectPackage: {
+    type: Object,
+    default: null
   },
   selectableModelOptions: {
     type: Array,
@@ -331,6 +339,7 @@ function handleNavigationNodeContextmenu(...args) {
             :model-type-options="structureModelTypeOptions"
             :filter-method="structureFilterMethod"
             :selected-tree-node="selectedTreeNode"
+            :binding-status-map="structureBindingMap"
             :mesh-opacity="meshOpacity"
             :active="activeSideTab === 'structure'"
             @refresh-tree="emit('refresh-tree')"
@@ -463,6 +472,7 @@ function handleNavigationNodeContextmenu(...args) {
             :scene-models="sceneModels"
             :active-model-id="activeSceneModelId"
             :groups="runtimeAssetGroups"
+            :project-package="projectPackage"
             :available-model-options="selectableModelOptions"
             :loading-model-options="loadingModelOptions"
             :quality="quality"

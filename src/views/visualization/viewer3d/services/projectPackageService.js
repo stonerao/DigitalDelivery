@@ -3,6 +3,35 @@ import { createDefaultClippingState } from "@/3d/runtime/clipping/clippingState"
 const PROJECT_PACKAGE_STORAGE_KEY = "dd-viewer-project-packages";
 const PROJECT_PACKAGE_BUNDLE_FORMAT = "dd-project-package-bundle";
 
+function createDefaultProjectExtensions() {
+  return {
+    schedule4d: {
+      enabled: false,
+      tasks: [],
+      bindings: []
+    },
+    cost5d: {
+      enabled: false,
+      items: [],
+      bindings: []
+    }
+  };
+}
+
+function normalizeProjectExtensions(extensions = {}) {
+  const defaults = createDefaultProjectExtensions();
+  return {
+    schedule4d: {
+      ...defaults.schedule4d,
+      ...(extensions?.schedule4d || {})
+    },
+    cost5d: {
+      ...defaults.cost5d,
+      ...(extensions?.cost5d || {})
+    }
+  };
+}
+
 function getStorageMap(storageKey = PROJECT_PACKAGE_STORAGE_KEY) {
   if (typeof window === "undefined" || !window.localStorage) return {};
   try {
@@ -70,6 +99,7 @@ export function createEmptyProjectPackage(scope, metadata = {}) {
         endpoint: ""
       }
     },
+    extensions: normalizeProjectExtensions(),
     updatedAt: Date.now()
   };
 }
@@ -101,7 +131,12 @@ function createBaseSections(projectPackage) {
     "assets/scene-manifest.json": payload.assets?.sceneManifest || {},
     "integrations/realtime.json": payload.integrations?.realtime || {},
     "integrations/backend-bridge.json":
-      payload.integrations?.backendBridge || {}
+      payload.integrations?.backendBridge || {},
+    "extensions/schedule-4d.json": normalizeProjectExtensions(
+      payload.extensions
+    ).schedule4d,
+    "extensions/cost-5d.json": normalizeProjectExtensions(payload.extensions)
+      .cost5d
   };
 }
 
@@ -149,7 +184,15 @@ export function parseProjectPackageBundle(bundle, metadata = {}) {
     integrations: {
       realtime: files["integrations/realtime.json"] || {},
       backendBridge: files["integrations/backend-bridge.json"] || {}
-    }
+    },
+    extensions: normalizeProjectExtensions({
+      schedule4d:
+        files["extensions/schedule-4d.json"] ||
+        createDefaultProjectExtensions().schedule4d,
+      cost5d:
+        files["extensions/cost-5d.json"] ||
+        createDefaultProjectExtensions().cost5d
+    })
   };
 }
 
@@ -171,6 +214,17 @@ function hasClippingConfiguration(clipping) {
   if (!clipping || typeof clipping !== "object") return false;
   if (clipping.enabled || clipping.capEnabled) return true;
   return Boolean(clipping.presetId);
+}
+
+function hasProjectExtensionContent(extensions = {}) {
+  return Boolean(
+    extensions?.schedule4d?.enabled ||
+    hasNonEmptyArray(extensions?.schedule4d?.tasks) ||
+    hasNonEmptyArray(extensions?.schedule4d?.bindings) ||
+    extensions?.cost5d?.enabled ||
+    hasNonEmptyArray(extensions?.cost5d?.items) ||
+    hasNonEmptyArray(extensions?.cost5d?.bindings)
+  );
 }
 
 export function hasProjectPackageContent(projectPackage) {
@@ -196,7 +250,8 @@ export function hasProjectPackageContent(projectPackage) {
     hasNonEmptyArray(projectPackage.scripts?.animations) ||
     hasNonEmptyArray(projectPackage.scripts?.triggers) ||
     projectPackage.integrations?.realtime?.enabled ||
-    projectPackage.integrations?.backendBridge?.enabled
+    projectPackage.integrations?.backendBridge?.enabled ||
+    hasProjectExtensionContent(projectPackage.extensions)
   );
 }
 
@@ -245,7 +300,8 @@ export function loadProjectPackage(scope, metadata = {}) {
       realtime: {},
       backendBridge: {},
       ...(payload.integrations || {})
-    }
+    },
+    extensions: normalizeProjectExtensions(payload.extensions)
   };
 }
 
@@ -280,7 +336,17 @@ export function patchProjectPackage(scope, patch, metadata = {}) {
     integrations: {
       ...current.integrations,
       ...(patch.integrations || {})
-    }
+    },
+    extensions: normalizeProjectExtensions({
+      schedule4d: {
+        ...(current.extensions?.schedule4d || {}),
+        ...(patch.extensions?.schedule4d || {})
+      },
+      cost5d: {
+        ...(current.extensions?.cost5d || {}),
+        ...(patch.extensions?.cost5d || {})
+      }
+    })
   };
   saveProjectPackage(scope, next);
   return next;

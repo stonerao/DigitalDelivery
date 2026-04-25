@@ -40,6 +40,7 @@ const cameraMarkerIconUrl = new URL(
 ).href;
 const textureLoader = new THREE.TextureLoader();
 const cameraMarkerTexture = textureLoader.load(cameraMarkerIconUrl);
+const anchorIconTextureCache = new Map();
 
 const props = defineProps({
   modelUrl: { type: String, default: "" },
@@ -758,6 +759,7 @@ let onFirstPersonMouseMove;
 let onPointerLockChange;
 
 const meshOpacityOverrides = new Map();
+const meshStatusColorOverrides = new Map();
 const visibilityOverrides = new Map();
 const hiddenTargetUUIDs = new Set();
 const hiddenVisibilityOverrides = new Map();
@@ -1195,6 +1197,44 @@ function createImageSprite(texture, options = {}) {
   return sprite;
 }
 
+function loadAnchorIconTexture(iconUrl) {
+  const url = String(iconUrl || "").trim();
+  if (!url) return null;
+
+  const cached = anchorIconTextureCache.get(url);
+  if (cached?.error) return null;
+  if (cached?.texture) return cached.texture;
+
+  const texture = textureLoader.load(
+    url,
+    loadedTexture => {
+      loadedTexture.needsUpdate = true;
+      noteUserInteraction();
+    },
+    undefined,
+    () => {
+      const entry = anchorIconTextureCache.get(url);
+      entry?.texture?.dispose?.();
+      anchorIconTextureCache.set(url, { error: true });
+      if (scene) {
+        renderSceneAnchors();
+        renderCameraAnchors();
+      }
+      noteUserInteraction();
+    }
+  );
+  if (THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
+  anchorIconTextureCache.set(url, { texture });
+  return texture;
+}
+
+function disposeAnchorIconTextures() {
+  anchorIconTextureCache.forEach(entry => {
+    entry?.texture?.dispose?.();
+  });
+  anchorIconTextureCache.clear();
+}
+
 function getAnchorTypeColor(type) {
   const map = {
     "measurement-point": 0x22c55e,
@@ -1248,6 +1288,7 @@ function getAnchorRenderStyle(anchor, isCamera = false) {
       style.iconWidth,
       DEFAULT_CAMERA_ICON_WIDTH
     ),
+    iconUrl: String(style.iconUrl || "").trim(),
     labelWidth: isCamera ? null : normalizeScreenLabelSize(style.labelWidth),
     labelHeight: normalizeScreenLabelSize(style.labelHeight),
     labelOffsetY:
@@ -1326,6 +1367,7 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
   group.userData.sceneAnchorId = anchor.id;
   group.userData.sceneAnchorType = anchor.type;
   group.position.copy(position);
+  const iconTexture = loadAnchorIconTexture(renderStyle.iconUrl);
 
   if (isCamera) {
     const hitArea = new THREE.Mesh(
@@ -1346,10 +1388,11 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
     hitArea.userData.sceneAnchorType = anchor.type;
     group.add(hitArea);
 
-    const cameraSprite = createImageSprite(cameraMarkerTexture, {
+    const markerTexture = iconTexture || cameraMarkerTexture;
+    const cameraSprite = createImageSprite(markerTexture, {
       scaleX: renderStyle.markerSize,
       scaleY: renderStyle.markerSize,
-      color: renderStyle.markerColor,
+      color: iconTexture ? 0xffffff : renderStyle.markerColor,
       sizeAttenuation: renderStyle.iconSizeAttenuation,
       screenWidth: renderStyle.iconWidth,
       center: [0.5, 0.0]
@@ -1361,15 +1404,50 @@ function buildSceneAnchorObject(anchor, isCamera = false) {
       group.add(cameraSprite);
     }
   } else {
-    const body = new THREE.Mesh(
-      new THREE.SphereGeometry(renderStyle.markerSize, 20, 20),
-      new THREE.MeshBasicMaterial({ color: renderStyle.markerColor })
-    );
-    body.userData.isHelper = true;
-    body.userData.isSceneAnchor = true;
-    body.userData.sceneAnchorId = anchor.id;
-    body.userData.sceneAnchorType = anchor.type;
-    group.add(body);
+    if (iconTexture) {
+      const hitArea = new THREE.Mesh(
+        new THREE.SphereGeometry(
+          Math.max(renderStyle.markerSize, 0.12),
+          16,
+          16
+        ),
+        new THREE.MeshBasicMaterial({
+          transparent: true,
+          opacity: 0,
+          depthWrite: false
+        })
+      );
+      hitArea.userData.isHelper = true;
+      hitArea.userData.isSceneAnchor = true;
+      hitArea.userData.sceneAnchorId = anchor.id;
+      hitArea.userData.sceneAnchorType = anchor.type;
+      group.add(hitArea);
+
+      const iconSprite = createImageSprite(iconTexture, {
+        scaleX: renderStyle.markerSize,
+        scaleY: renderStyle.markerSize,
+        color: 0xffffff,
+        sizeAttenuation: renderStyle.iconSizeAttenuation,
+        screenWidth: renderStyle.iconWidth,
+        center: [0.5, 0.0]
+      });
+      if (iconSprite) {
+        iconSprite.userData.isSceneAnchor = true;
+        iconSprite.userData.sceneAnchorId = anchor.id;
+        iconSprite.userData.sceneAnchorType = anchor.type;
+        group.add(iconSprite);
+      }
+    } else {
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(renderStyle.markerSize, 20, 20),
+        new THREE.MeshBasicMaterial({ color: renderStyle.markerColor })
+      );
+      body.userData.isHelper = true;
+      body.userData.isSceneAnchor = true;
+      body.userData.sceneAnchorId = anchor.id;
+      body.userData.sceneAnchorType = anchor.type;
+      group.add(body);
+    }
   }
 
   if (renderStyle.showLabel) {
@@ -2113,6 +2191,135 @@ function setMeshOpacityByUUID(uuid, opacity = 0.2) {
   obj.material = override;
   noteUserInteraction();
   return true;
+}
+
+function collectStatusTargetMeshes(target) {
+  const meshes = [];
+  if (!target) return meshes;
+  if (target.isMesh) {
+    meshes.push(target);
+    return meshes;
+  }
+  target.traverse?.(obj => {
+    if (obj?.isMesh && !obj.userData?.isHelper && !obj.userData?.isMeasure) {
+      meshes.push(obj);
+    }
+  });
+  return meshes;
+}
+
+function normalizeStatusColor(color) {
+  try {
+    return new THREE.Color(color || "#f59e0b");
+  } catch {
+    return new THREE.Color("#f59e0b");
+  }
+}
+
+function createStatusColorOverride(material, color, opacity = 1) {
+  const tint = normalizeStatusColor(color);
+  const nextOpacity = Math.max(0.2, Math.min(1, Number(opacity) || 1));
+  const makeOverride = source => {
+    const next = source?.clone?.() || new THREE.MeshStandardMaterial();
+    if (next.color?.isColor) {
+      next.color.lerp(tint, 0.52);
+    } else if ("color" in next) {
+      next.color = tint.clone();
+    }
+    if (next.emissive?.isColor) {
+      next.emissive.lerp(tint, 0.88);
+      next.emissiveIntensity = Math.max(
+        0.55,
+        Number(next.emissiveIntensity) || 0
+      );
+    }
+    if (nextOpacity < 1) {
+      next.transparent = true;
+      next.opacity = nextOpacity;
+      next.depthWrite = nextOpacity >= 0.82;
+    }
+    next.needsUpdate = true;
+    return next;
+  };
+
+  return Array.isArray(material)
+    ? material.map(makeOverride)
+    : makeOverride(material);
+}
+
+function clearObjectStatusColors(options = {}) {
+  if (!meshStatusColorOverrides.size) return 0;
+
+  objectPicker?.clearHighlight?.();
+  objectPicker?.clearSelection?.();
+
+  let cleared = 0;
+  meshStatusColorOverrides.forEach((entry, uuid) => {
+    const obj = findObjectByUUID(uuid);
+    const opacityEntry = meshOpacityOverrides.get(uuid);
+    let restoreMaterial = entry.original;
+    if (opacityEntry) {
+      if (opacityEntry.original === entry.override) {
+        restoreMaterial = entry.original;
+      } else if (entry.original === opacityEntry.override) {
+        restoreMaterial = opacityEntry.original;
+      }
+      disposeMaterialSafe(opacityEntry.override);
+      meshOpacityOverrides.delete(uuid);
+    }
+    if (obj?.isMesh) {
+      obj.material = restoreMaterial;
+    }
+    disposeMaterialSafe(entry.override);
+    cleared += 1;
+  });
+  meshStatusColorOverrides.clear();
+  markPickTargetsDirty();
+  if (!options.silent) noteUserInteraction();
+  return cleared;
+}
+
+function setObjectStatusColors(entries = []) {
+  clearObjectStatusColors({ silent: true });
+  if (!Array.isArray(entries) || !entries.length) return 0;
+
+  const seen = new Set();
+  let applied = 0;
+  entries.forEach(entry => {
+    const color = entry?.color || "#f59e0b";
+    const opacity = entry?.opacity ?? 1;
+    const uuids = [
+      ...(Array.isArray(entry?.uuids) ? entry.uuids : []),
+      entry?.uuid
+    ]
+      .map(uuid => String(uuid || "").trim())
+      .filter(Boolean);
+
+    uuids.forEach(uuid => {
+      const target = findObjectByUUID(uuid);
+      collectStatusTargetMeshes(target).forEach(mesh => {
+        if (!mesh?.uuid || seen.has(mesh.uuid)) return;
+        seen.add(mesh.uuid);
+        const override = createStatusColorOverride(
+          mesh.material,
+          color,
+          opacity
+        );
+        meshStatusColorOverrides.set(mesh.uuid, {
+          original: mesh.material,
+          override
+        });
+        mesh.material = override;
+        applied += 1;
+      });
+    });
+  });
+
+  if (applied) {
+    markPickTargetsDirty();
+    noteUserInteraction();
+  }
+  return applied;
 }
 
 function isVisibilityManagedObject(obj) {
@@ -2983,6 +3190,7 @@ function clearModel() {
   hiddenTargetUUIDs.clear();
   hiddenVisibilityOverrides.clear();
   clearBoxSelection();
+  clearObjectStatusColors({ silent: true });
   meshOpacityOverrides.forEach(v => disposeMaterialSafe(v.override));
   meshOpacityOverrides.clear();
   lastBounds = null;
@@ -3749,6 +3957,7 @@ function clearQualitySideEffects() {
   objectPicker?.clearSelection?.();
   objectPicker?.clearHighlight?.();
 
+  clearObjectStatusColors({ silent: true });
   meshOpacityOverrides.forEach(v => disposeMaterialSafe(v.override));
   meshOpacityOverrides.clear();
 }
@@ -3855,6 +4064,7 @@ function destroy() {
 
   clearModel();
   fixedScreenSprites.clear();
+  disposeAnchorIconTextures();
 
   // 销毁工具
   perfMonitor?.dispose();
@@ -3932,6 +4142,8 @@ defineExpose({
   focusByUUID,
   focusByUUIDs,
   setMeshOpacityByUUID,
+  setObjectStatusColors,
+  clearObjectStatusColors,
   clearBoxSelection,
   isolateByUUID,
   showOnlyUUIDs,

@@ -72,6 +72,10 @@ function itemLocation(item) {
   }
   return "未定位";
 }
+
+function itemIconUrl(item) {
+  return item?.style?.iconUrl || "";
+}
 </script>
 
 <template>
@@ -114,19 +118,29 @@ function itemLocation(item) {
           @click="emit('select-item', item)"
         >
           <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <div class="truncate text-sm font-semibold">
-                {{ item.name || item.cameraName || item.code || item.id }}
+            <div class="flex min-w-0 flex-1 items-start gap-2">
+              <div class="dd-anchor-list-icon">
+                <img
+                  v-if="itemIconUrl(item)"
+                  :src="itemIconUrl(item)"
+                  :alt="item.style?.iconLabel || ''"
+                />
+                <span v-else>{{ kind === "camera" ? "摄" : "点" }}</span>
               </div>
-              <div
-                class="truncate text-xs text-[var(--el-text-color-secondary)]"
-              >
-                {{ itemSubtitle(item) || "-" }}
-              </div>
-              <div
-                class="mt-1 line-clamp-2 text-xs text-[var(--el-text-color-secondary)]"
-              >
-                {{ itemLocation(item) }}
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold">
+                  {{ item.name || item.cameraName || item.code || item.id }}
+                </div>
+                <div
+                  class="truncate text-xs text-[var(--el-text-color-secondary)]"
+                >
+                  {{ itemSubtitle(item) || "-" }}
+                </div>
+                <div
+                  class="mt-1 line-clamp-2 text-xs text-[var(--el-text-color-secondary)]"
+                >
+                  {{ itemLocation(item) }}
+                </div>
               </div>
             </div>
             <div class="flex flex-col items-end">
@@ -153,3 +167,26 @@ function itemLocation(item) {
     </el-scrollbar>
   </div>
 </template>
+
+<style scoped>
+.dd-anchor-list-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+}
+
+.dd-anchor-list-icon img {
+  max-width: 30px;
+  max-height: 30px;
+  object-fit: contain;
+}
+</style>

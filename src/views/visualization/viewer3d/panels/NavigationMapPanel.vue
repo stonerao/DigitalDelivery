@@ -37,6 +37,15 @@ const visibleItems = computed(() =>
       Number.isFinite(Number(item?.yPercent))
   )
 );
+const hiddenItemCount = computed(() =>
+  Math.max(0, props.items.length - visibleItems.value.length)
+);
+const mapStatusText = computed(() => {
+  if (props.loading) return "正在生成导航图...";
+  if (!props.snapshot?.imageUrl) return "未生成导航图，可点击刷新重新生成。";
+  if (!visibleItems.value.length) return "导航图已生成，但暂无可定位热点。";
+  return `已映射 ${visibleItems.value.length} 个热点`;
+});
 
 function getItemShortLabel(item) {
   if (item?.shortLabel) return item.shortLabel;
@@ -64,13 +73,15 @@ function handleItemClick(item) {
   <div class="rounded border border-[var(--el-border-color)] p-3">
     <div class="mb-2 flex items-center justify-between gap-2">
       <div class="text-sm font-semibold">导航图</div>
-      <el-button size="small" link @click="emit('refresh')">刷新</el-button>
+      <el-button size="small" link :loading="loading" @click="emit('refresh')">
+        刷新
+      </el-button>
     </div>
     <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
       {{
         disabled
           ? "平面渲染下仅展示导航图，不支持视角定位。"
-          : "点击热点可快速定位系统或书签视角。"
+          : "点击热点可快速定位系统、书签或当前设备。"
       }}
     </div>
 
@@ -111,6 +122,8 @@ function handleItemClick(item) {
     <div
       class="mt-3 flex flex-wrap gap-3 text-xs text-[var(--el-text-color-secondary)]"
     >
+      <span>{{ mapStatusText }}</span>
+      <span v-if="hiddenItemCount">未映射 {{ hiddenItemCount }} 个热点</span>
       <span class="dd-map-legend">
         <i class="dd-map-dot is-system" />
         系统

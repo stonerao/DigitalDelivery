@@ -38,6 +38,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  bindingStatusMap: {
+    type: Object,
+    default: () => ({})
+  },
   meshOpacity: {
     type: Number,
     default: 0.2
@@ -71,6 +75,38 @@ const treeHeight = ref(400);
 const treeInstanceKey = ref(0);
 const treeData = ref([]);
 let treePanelObserver = null;
+
+function getNodeBindingStatus(node = {}) {
+  const key = String(node?.uuid || "").trim();
+  if (!key) return {};
+  return props.bindingStatusMap[key] || {};
+}
+
+function hasBindingStatus(node = {}) {
+  const status = getNodeBindingStatus(node);
+  return Boolean(
+    status.kks ||
+    status.state ||
+    status.documentCount ||
+    status.measurementCount
+  );
+}
+
+function getStatusTagType(status = "") {
+  const text = String(status || "").toLowerCase();
+  if (!text || text === "-") return "info";
+  if (
+    ["alarm", "danger", "error", "告警", "报警", "异常"].some(item =>
+      text.includes(item)
+    )
+  ) {
+    return "danger";
+  }
+  if (["warning", "warn", "预警", "警告"].some(item => text.includes(item))) {
+    return "warning";
+  }
+  return "success";
+}
 
 function syncTreePanelHeight() {
   nextTick(() => {
@@ -189,7 +225,7 @@ onBeforeUnmount(() => {
         node-key="uuid"
         :props="treeV2Props"
         :height="treeHeight"
-        :item-size="28"
+        :item-size="34"
         :highlight-current="true"
         :default-expanded-keys="treeDefaultExpandedKeys"
         :expand-on-click-node="false"
@@ -197,7 +233,48 @@ onBeforeUnmount(() => {
         @node-click="emit('tree-node-click', $event)"
         @node-expand="emit('tree-node-expand', $event)"
         @node-collapse="emit('tree-node-collapse', $event)"
-      />
+      >
+        <template #default="{ data }">
+          <div class="dd-structure-node">
+            <span class="dd-structure-node__label">
+              {{ data.name || data.label || data.uuid }}
+            </span>
+            <span v-if="hasBindingStatus(data)" class="dd-structure-node__tags">
+              <el-tag
+                v-if="getNodeBindingStatus(data).kks"
+                size="small"
+                effect="plain"
+              >
+                KKS
+              </el-tag>
+              <el-tag
+                v-if="getNodeBindingStatus(data).state"
+                size="small"
+                effect="plain"
+                :type="getStatusTagType(getNodeBindingStatus(data).state)"
+              >
+                {{ getNodeBindingStatus(data).state }}
+              </el-tag>
+              <el-tag
+                v-if="getNodeBindingStatus(data).documentCount"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                文件 {{ getNodeBindingStatus(data).documentCount }}
+              </el-tag>
+              <el-tag
+                v-if="getNodeBindingStatus(data).measurementCount"
+                size="small"
+                type="warning"
+                effect="plain"
+              >
+                测点 {{ getNodeBindingStatus(data).measurementCount }}
+              </el-tag>
+            </span>
+          </div>
+        </template>
+      </el-tree-v2>
       <div v-else class="text-xs text-[var(--el-text-color-secondary)]">
         未加载结构（请先加载模型）
       </div>
@@ -207,6 +284,42 @@ onBeforeUnmount(() => {
       <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
         已选：{{ selectedTreeNode.name }}
         <span v-if="selectedTreeNode.isMesh" class="ml-1">(Mesh)</span>
+      </div>
+      <div
+        v-if="hasBindingStatus(selectedTreeNode)"
+        class="mb-2 flex flex-wrap gap-1"
+      >
+        <el-tag
+          v-if="getNodeBindingStatus(selectedTreeNode).kks"
+          size="small"
+          effect="plain"
+        >
+          KKS：{{ getNodeBindingStatus(selectedTreeNode).kks }}
+        </el-tag>
+        <el-tag
+          v-if="getNodeBindingStatus(selectedTreeNode).state"
+          size="small"
+          effect="plain"
+          :type="getStatusTagType(getNodeBindingStatus(selectedTreeNode).state)"
+        >
+          {{ getNodeBindingStatus(selectedTreeNode).state }}
+        </el-tag>
+        <el-tag
+          v-if="getNodeBindingStatus(selectedTreeNode).documentCount"
+          size="small"
+          type="success"
+          effect="plain"
+        >
+          文件 {{ getNodeBindingStatus(selectedTreeNode).documentCount }}
+        </el-tag>
+        <el-tag
+          v-if="getNodeBindingStatus(selectedTreeNode).measurementCount"
+          size="small"
+          type="warning"
+          effect="plain"
+        >
+          测点 {{ getNodeBindingStatus(selectedTreeNode).measurementCount }}
+        </el-tag>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
@@ -263,5 +376,28 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 220px;
   overflow: auto;
+}
+
+.dd-structure-node {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.dd-structure-node__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dd-structure-node__tags {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
 }
 </style>

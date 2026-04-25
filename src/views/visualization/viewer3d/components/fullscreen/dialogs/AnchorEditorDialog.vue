@@ -1,4 +1,6 @@
 <script setup>
+import { computed } from "vue";
+
 const visible = defineModel("visible", {
   type: Boolean,
   default: false
@@ -9,7 +11,7 @@ const formModel = defineModel("form", {
   default: () => ({})
 });
 
-defineProps({
+const props = defineProps({
   minimized: {
     type: Boolean,
     default: false
@@ -54,6 +56,14 @@ defineProps({
     type: Array,
     default: () => []
   },
+  anchorIconOptions: {
+    type: Array,
+    default: () => []
+  },
+  cameraIconOptions: {
+    type: Array,
+    default: () => []
+  },
   positionPickingActive: {
     type: Boolean,
     default: false
@@ -71,6 +81,55 @@ const emit = defineEmits([
   "confirm-picked-position",
   "cancel-position-picking"
 ]);
+
+const currentIconOptions = computed(() =>
+  props.kind === "camera" ? props.cameraIconOptions : props.anchorIconOptions
+);
+
+function ensureFormStyle() {
+  if (!formModel.value.style || typeof formModel.value.style !== "object") {
+    formModel.value.style = {};
+  }
+  return formModel.value.style;
+}
+
+const selectedIcon = computed(() => {
+  const style = formModel.value?.style || {};
+  const iconKey = style.iconKey || "";
+  const iconUrl = style.iconUrl || "";
+  const matched = currentIconOptions.value.find(
+    item =>
+      (iconKey && item.key === iconKey) || (iconUrl && item.url === iconUrl)
+  );
+  if (matched) return matched;
+  if (iconUrl) {
+    return {
+      key: "",
+      label: style.iconLabel || "自定义图标",
+      url: iconUrl
+    };
+  }
+  return null;
+});
+
+const selectedIconKey = computed({
+  get() {
+    return selectedIcon.value?.key || "";
+  },
+  set(value) {
+    const style = ensureFormStyle();
+    const icon = currentIconOptions.value.find(item => item.key === value);
+    if (!icon) {
+      style.iconKey = "";
+      style.iconUrl = "";
+      style.iconLabel = "";
+      return;
+    }
+    style.iconKey = icon.key;
+    style.iconUrl = icon.url;
+    style.iconLabel = icon.label;
+  }
+});
 </script>
 
 <template>
@@ -122,6 +181,46 @@ const emit = defineEmits([
           </el-select>
         </el-form-item>
       </template>
+
+      <el-form-item label="图标">
+        <div class="dd-icon-picker">
+          <el-select
+            v-model="selectedIconKey"
+            class="dd-icon-picker__select"
+            filterable
+            placeholder="默认图标"
+          >
+            <el-option label="默认图标" value="">
+              <div class="dd-icon-option">
+                <span class="dd-icon-option__empty">默认</span>
+                <span>默认图标</span>
+              </div>
+            </el-option>
+            <el-option
+              v-for="item in currentIconOptions"
+              :key="item.key"
+              :label="item.label"
+              :value="item.key"
+            >
+              <div class="dd-icon-option">
+                <img :src="item.url" :alt="item.label" />
+                <span>{{ item.label }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <div
+            class="dd-icon-picker__preview"
+            :class="{ 'is-empty': !selectedIcon }"
+          >
+            <img
+              v-if="selectedIcon"
+              :src="selectedIcon.url"
+              :alt="selectedIcon.label"
+            />
+            <span v-else>默认</span>
+          </div>
+        </div>
+      </el-form-item>
 
       <el-form-item label="定位方式">
         <el-radio-group v-model="formModel.anchorMode">
@@ -356,5 +455,67 @@ const emit = defineEmits([
   border: 1px solid var(--el-border-color-light);
   background: var(--el-bg-color-overlay);
   box-shadow: var(--el-box-shadow-light);
+}
+
+.dd-icon-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.dd-icon-picker__select {
+  width: 100%;
+}
+
+.dd-icon-picker__preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+}
+
+.dd-icon-picker__preview img {
+  max-width: 40px;
+  max-height: 40px;
+  object-fit: contain;
+}
+
+.dd-icon-picker__preview.is-empty {
+  background: var(--el-fill-color-blank);
+}
+
+.dd-icon-option {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.dd-icon-option img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.dd-icon-option__empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
 }
 </style>

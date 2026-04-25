@@ -215,7 +215,10 @@ const emit = defineEmits([
   "update:animationAxis",
   "reset-clipping",
   "close-object-panel",
-  "update:pointMarkersVisible"
+  "update:pointMarkersVisible",
+  "document-detail",
+  "document-preview",
+  "document-download"
 ]);
 
 const viewerRef = ref(null);
@@ -326,6 +329,9 @@ watch(
       :point-markers-visible="pointMarkersVisible"
       @close="emit('close-object-panel')"
       @update:point-markers-visible="emit('update:pointMarkersVisible', $event)"
+      @document-detail="emit('document-detail', $event)"
+      @document-preview="emit('document-preview', $event)"
+      @document-download="emit('document-download', $event)"
     />
   </div>
 </template>

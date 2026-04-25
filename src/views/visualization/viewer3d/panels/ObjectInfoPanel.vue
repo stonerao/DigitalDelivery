@@ -48,7 +48,13 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["close", "update:pointMarkersVisible"]);
+const emit = defineEmits([
+  "close",
+  "update:pointMarkersVisible",
+  "document-detail",
+  "document-preview",
+  "document-download"
+]);
 
 const hasDeviceLedger = computed(() => {
   const profile = props.selectedDeviceProfile;
@@ -359,6 +365,32 @@ const hasDeviceRunning = computed(
               min-width="140"
               show-overflow-tooltip
             />
+            <el-table-column label="操作" width="138" fixed="right">
+              <template #default="scope">
+                <el-button
+                  size="small"
+                  link
+                  type="primary"
+                  @click="emit('document-preview', scope.row)"
+                >
+                  预览
+                </el-button>
+                <el-button
+                  size="small"
+                  link
+                  @click="emit('document-detail', scope.row)"
+                >
+                  详情
+                </el-button>
+                <el-button
+                  size="small"
+                  link
+                  @click="emit('document-download', scope.row)"
+                >
+                  下载
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
 

@@ -23,6 +23,22 @@ const emit = defineEmits([
   "locate-device",
   "isolate-device"
 ]);
+
+function getStatusTagType(status = "") {
+  const text = String(status || "").toLowerCase();
+  if (!text || text === "-") return "info";
+  if (
+    ["alarm", "danger", "error", "告警", "报警", "异常"].some(item =>
+      text.includes(item)
+    )
+  ) {
+    return "danger";
+  }
+  if (["warning", "warn", "预警", "警告"].some(item => text.includes(item))) {
+    return "warning";
+  }
+  return "success";
+}
 </script>
 
 <template>
@@ -68,8 +84,15 @@ const emit = defineEmits([
                 {{ item.path }}
               </div>
               <div class="mt-1 text-xs text-[var(--el-text-color-secondary)]">
-                {{ item.systemName || "未绑定系统" }} /
-                {{ item.status || "-" }}
+                {{ item.systemName || "未绑定系统" }}
+                <el-tag
+                  class="ml-1"
+                  size="small"
+                  effect="plain"
+                  :type="getStatusTagType(item.status)"
+                >
+                  {{ item.status || "-" }}
+                </el-tag>
               </div>
             </div>
             <div class="flex flex-col items-end">

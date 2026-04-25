@@ -38,13 +38,32 @@ const failedThumbnailSources = ref(new Set());
 const thumbnailRevokeMap = new Map();
 
 const selectedSet = computed(() => new Set(props.modelPickerSelection));
+const addableModelOptions = computed(() =>
+  props.selectableModelOptions.filter(item => !isOptionDisabled(item))
+);
+const loadedModelCount = computed(
+  () => props.selectableModelOptions.filter(isOptionLoaded).length
+);
+const thumbnailOptionSignature = computed(() =>
+  props.selectableModelOptions.map(getThumbnailKey).join("|")
+);
 
 const filteredModelOptions = computed(() => {
   const text = keyword.value.trim().toLowerCase();
   if (!text) return props.selectableModelOptions;
   return props.selectableModelOptions.filter(item => {
     const model = getOptionModel(item);
-    return [item.label, model.name, model.lod, model.updatedAt]
+    return [
+      item.label,
+      model.name,
+      model.lod,
+      model.updatedAt,
+      getOptionVersionLabel(item),
+      getOptionUploader(item),
+      getOptionChangeLog(item),
+      getOptionStatusLabel(item),
+      isOptionLoaded(item) ? "已加载" : "可添加"
+    ]
       .map(value => String(value || "").toLowerCase())
       .some(value => value.includes(text));
   });
@@ -54,9 +73,108 @@ function getOptionModel(option = {}) {
   return option.raw || option;
 }
 
+function firstText(...values) {
+  const hit = values
+    .map(value => String(value ?? "").trim())
+    .find(value => value && value !== "-");
+  return hit || "";
+}
+
+function getOptionVersionLabel(option = {}) {
+  const model = getOptionModel(option);
+  return (
+    firstText(
+      model.versionName,
+      model.version,
+      model.modelVersion,
+      model.versionNo,
+      model.revision,
+      model.metadata?.versionName,
+      model.metadata?.modelVersion
+    ) || "未提供"
+  );
+}
+
+function getOptionUploader(option = {}) {
+  const model = getOptionModel(option);
+  return (
+    firstText(
+      model.uploadedBy,
+      model.uploadUserName,
+      model.createdBy,
+      model.updatedBy,
+      model.metadata?.uploadedBy
+    ) || "未提供"
+  );
+}
+
+function getOptionChangeLog(option = {}) {
+  const model = getOptionModel(option);
+  return firstText(
+    model.changeLog,
+    model.changeRemark,
+    model.remark,
+    model.description,
+    model.metadata?.changeLog
+  );
+}
+
 function getThumbnailKey(option) {
   const model = getOptionModel(option);
   return `${model?.id || option?.value || ""}|${model?.thumbnailUrl || ""}`;
+}
+
+function isOptionLoaded(option) {
+  return option?.loaded === true;
+}
+
+function isOptionDisabled(option) {
+  return option?.disabled === true || isOptionLoaded(option);
+}
+
+function getOptionStatusLabel(option) {
+  const model = getOptionModel(option);
+  return String(
+    option?.statusLabel ||
+      model?.statusLabel ||
+      model?.statusName ||
+      model?.convertStatus ||
+      model?.status ||
+      ""
+  ).trim();
+}
+
+function getOptionStatusTagType(option) {
+  const status = getOptionStatusLabel(option).toLowerCase();
+  if (!status) return "info";
+  if (
+    ["fail", "failed", "error", "失败", "异常"].some(item =>
+      status.includes(item)
+    )
+  ) {
+    return "danger";
+  }
+  if (
+    [
+      "process",
+      "processing",
+      "upload",
+      "convert",
+      "上传",
+      "转换",
+      "处理中"
+    ].some(item => status.includes(item))
+  ) {
+    return "warning";
+  }
+  if (
+    ["success", "ready", "done", "完成", "成功", "可预览"].some(item =>
+      status.includes(item)
+    )
+  ) {
+    return "success";
+  }
+  return "info";
 }
 
 function getThumbnailSrc(option) {
@@ -157,7 +275,10 @@ function revokeAllThumbnailObjectUrls() {
   thumbnailObjectUrls.value = {};
 }
 
-function toggleSelection(value) {
+function toggleSelection(option) {
+  if (isOptionDisabled(option)) return;
+  const value = option?.value;
+  if (!value) return;
   const next = new Set(props.modelPickerSelection);
   if (next.has(value)) {
     next.delete(value);
@@ -172,7 +293,7 @@ function clearSelection() {
 }
 
 watch(
-  () => [props.modelValue, props.selectableModelOptions.length, keyword.value],
+  () => [props.modelValue, thumbnailOptionSignature.value, keyword.value],
   () => {
     if (!props.modelValue) return;
     loadModelThumbnails();
@@ -198,12 +319,12 @@ onBeforeUnmount(() => {
         <el-input
           v-model="keyword"
           clearable
-          placeholder="搜索模型名称 / LOD / 更新时间"
+          placeholder="搜索模型名称 / LOD / 版本 / 上传人"
           class="dd-model-picker__search"
         />
         <div class="dd-model-picker__summary">
-          已选 {{ modelPickerSelection.length }} / 可选
-          {{ selectableModelOptions.length }}
+          已选 {{ modelPickerSelection.length }} / 可添加
+          {{ addableModelOptions.length }} / 已加载 {{ loadedModelCount }}
         </div>
       </div>
 
@@ -215,9 +336,12 @@ onBeforeUnmount(() => {
             type="button"
             class="dd-model-picker-card"
             :class="{
-              'is-selected': selectedSet.has(item.value)
+              'is-selected': selectedSet.has(item.value),
+              'is-loaded': isOptionLoaded(item),
+              'is-disabled': isOptionDisabled(item)
             }"
-            @click="toggleSelection(item.value)"
+            :disabled="isOptionDisabled(item)"
+            @click="toggleSelection(item)"
           >
             <span class="dd-model-picker-card__thumb">
               <img
@@ -237,25 +361,53 @@ onBeforeUnmount(() => {
               <span class="dd-model-picker-card__name">
                 {{ item.label }}
               </span>
+              <span class="dd-model-picker-card__tags">
+                <el-tag v-if="item.active" size="small" type="primary">
+                  当前
+                </el-tag>
+                <el-tag v-else-if="isOptionLoaded(item)" size="small">
+                  已加载
+                </el-tag>
+                <el-tag
+                  v-if="getOptionStatusLabel(item)"
+                  size="small"
+                  effect="plain"
+                  :type="getOptionStatusTagType(item)"
+                >
+                  {{ getOptionStatusLabel(item) }}
+                </el-tag>
+              </span>
               <span class="dd-model-picker-card__meta">
                 精度：{{ getOptionModel(item).lod || "LOD300" }} / 构件：{{
                   getOptionModel(item).components || 0
                 }}
               </span>
+              <span class="dd-model-picker-card__meta">
+                版本：{{ getOptionVersionLabel(item) }} / 上传人：{{
+                  getOptionUploader(item)
+                }}
+              </span>
               <span class="dd-model-picker-card__time">
                 更新：{{ getOptionModel(item).updatedAt || "-" }}
+              </span>
+              <span
+                v-if="getOptionChangeLog(item)"
+                class="dd-model-picker-card__time"
+              >
+                变更：{{ getOptionChangeLog(item) }}
               </span>
             </span>
             <span class="dd-model-picker-card__check">
               <el-checkbox
                 :model-value="selectedSet.has(item.value)"
+                :disabled="isOptionDisabled(item)"
                 @click.stop
-                @update:model-value="toggleSelection(item.value)"
+                @update:model-value="toggleSelection(item)"
               />
             </span>
           </button>
         </div>
-        <el-empty v-else description="暂无可添加模型" :image-size="88" />
+        <el-empty v-else description="未匹配到模型" :image-size="88" />
       </div>
     </div>
     <template #footer>
@@ -342,6 +494,21 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px var(--el-color-primary-light-5);
 }
 
+.dd-model-picker-card.is-loaded {
+  background: var(--el-fill-color-extra-light);
+}
+
+.dd-model-picker-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
+.dd-model-picker-card.is-disabled:hover {
+  background: var(--el-fill-color-extra-light);
+  border-color: var(--el-border-color);
+  box-shadow: none;
+}
+
 .dd-model-picker-card__thumb {
   position: relative;
   display: block;
@@ -386,6 +553,13 @@ onBeforeUnmount(() => {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dd-model-picker-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 20px;
 }
 
 .dd-model-picker-card__meta,

@@ -2,6 +2,10 @@ import {
   loadProjectPackage,
   patchProjectPackage
 } from "./projectPackageService";
+import {
+  normalizeSceneAnchorIconStyle,
+  pickPersistedSceneAnchorIconStyle
+} from "./sceneAnchorIconService";
 
 export const VIEWER_ANCHOR_STORAGE_KEY = "dd-viewer-scene-anchors";
 
@@ -66,15 +70,15 @@ function normalizeScreenSize(value, fallback = 50) {
 
 export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
   const isCamera = type === "camera-point";
+  const iconStyle = normalizeSceneAnchorIconStyle(style);
   return {
     markerSize: normalizePositiveNumber(
       style.markerSize,
       isCamera ? 0.42 : 0.09
     ),
     labelFontSize: normalizePositiveNumber(style.labelFontSize, 24),
-    ...(isCamera
-      ? { iconWidth: normalizeScreenSize(style.iconWidth, 60) }
-      : { labelWidth: normalizeScreenSize(style.labelWidth) }),
+    iconWidth: normalizeScreenSize(style.iconWidth, isCamera ? 60 : 52),
+    ...(isCamera ? {} : { labelWidth: normalizeScreenSize(style.labelWidth) }),
     labelHeight: normalizeScreenSize(style.labelHeight),
     labelOffsetY: normalizePositiveNumber(
       style.labelOffsetY,
@@ -83,8 +87,15 @@ export function normalizeAnchorStyle(style = {}, type = "measurement-point") {
     iconSizeAttenuation: Boolean(style.iconSizeAttenuation),
     showLabel: isCamera ? style.showLabel === true : style.showLabel !== false,
     color: asText(style.color || (isCamera ? "#0f766e" : "")),
-    labelColor: asText(style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff"))
+    labelColor: asText(style.labelColor || (isCamera ? "#e6f4ff" : "#ffffff")),
+    iconKey: iconStyle.iconKey,
+    iconUrl: iconStyle.iconUrl,
+    iconLabel: iconStyle.iconLabel
   };
+}
+
+export function pickAnchorIconStyle(style = {}) {
+  return pickPersistedSceneAnchorIconStyle(style);
 }
 
 function buildBaseAnchor(partial = {}, options = {}) {
@@ -154,7 +165,7 @@ function buildCameraAnchor(partial = {}, options = {}) {
       partial.bindDeviceKks || partial.businessBinding?.kks
     ),
     bindObjectUuid: asText(partial.bindObjectUuid || partial.objectUuid),
-    style: normalizeAnchorStyle(partial.style, "camera-point")
+    style: normalizeAnchorStyle(mergedStyle, "camera-point")
   };
 }
 

@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { normalizeAnchorForm, normalizeCameraForm } from "./sceneAnchorService";
+import { normalizeSceneAnchorIconStyle } from "./sceneAnchorIconService";
 
 function toText(value) {
   return String(value ?? "").trim();
@@ -45,6 +46,7 @@ function buildAnchorExcelRows(items = []) {
     偏移Z: item.offset?.[2] ?? "",
     是否可见: item.visible !== false,
     状态: item.status || "",
+    图标: item.style?.iconKey || item.style?.iconUrl || "",
     绑定类型: item.businessBinding?.bindingType || "",
     绑定KKS: item.businessBinding?.kks || "",
     绑定测点: item.businessBinding?.tag || "",
@@ -73,6 +75,7 @@ function buildCameraExcelRows(items = []) {
     偏移Z: item.offset?.[2] ?? "",
     是否可见: item.visible !== false,
     状态: item.status || "",
+    图标: item.style?.iconKey || item.style?.iconUrl || "",
     绑定设备KKS: item.bindDeviceKks || "",
     流类型: item.streamType || "",
     流地址: item.streamUrl || "",
@@ -101,6 +104,10 @@ function normalizeAnchorExcelRow(row = {}) {
     ],
     visible: toBoolean(row.是否可见, true),
     status: toText(row.状态) || "normal",
+    style: normalizeSceneAnchorIconStyle({
+      iconKey: toText(row.图标),
+      iconUrl: toText(row.图标)
+    }),
     businessBinding: {
       bindingType: toText(row.绑定类型) || "measurement",
       kks: toText(row.绑定KKS),
@@ -138,6 +145,10 @@ function normalizeCameraExcelRow(row = {}) {
     ],
     visible: toBoolean(row.是否可见, true),
     status: toText(row.状态) || "online",
+    style: normalizeSceneAnchorIconStyle({
+      iconKey: toText(row.图标),
+      iconUrl: toText(row.图标)
+    }),
     bindDeviceKks: toText(row.绑定设备KKS),
     streamType: toText(row.流类型) || "flv",
     streamUrl: toText(row.流地址),

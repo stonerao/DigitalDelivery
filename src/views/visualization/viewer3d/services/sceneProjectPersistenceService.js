@@ -13,15 +13,29 @@ export function readViewerApiRecords(data) {
 
 export function normalizeViewerModelItem(item) {
   return normalizeHandoverModelRecord({
+    ...item,
     id: item?.id || "",
-    name: item?.name || "未命名模型",
-    lod: item?.lod || "LOD300",
-    components: Number(item?.components || 0),
-    updatedAt: item?.updatedAt || "-",
+    name: item?.name || item?.modelName || "未命名模型",
+    lod: item?.lod || item?.metadata?.lod || "LOD300",
+    components: Number(
+      item?.components || item?.componentCount || item?.meshCount || 0
+    ),
+    updatedAt: item?.updatedAt || item?.uploadedAt || item?.createdAt || "-",
     nodeIds: Array.isArray(item?.nodeIds) ? item.nodeIds : [],
     kksRefs: Array.isArray(item?.kksRefs) ? item.kksRefs : [],
-    url: item?.url || "",
-    thumbnailUrl: item?.thumbnailUrl || item?.thumbnail || ""
+    url: item?.url || item?.modelUrl || item?.downloadUrl || "",
+    thumbnailUrl: item?.thumbnailUrl || item?.thumbnail || "",
+    version:
+      item?.version || item?.modelVersion || item?.versionNo || item?.revision,
+    versionName: item?.versionName || item?.versionLabel || "",
+    uploadedBy:
+      item?.uploadedBy ||
+      item?.uploadUserName ||
+      item?.createdBy ||
+      item?.updatedBy ||
+      "",
+    changeLog:
+      item?.changeLog || item?.changeRemark || item?.remark || item?.description
   });
 }
 
@@ -74,6 +88,36 @@ export function createViewerSceneModel(
     },
     metadata: {
       lod: detail.lod || partial.metadata?.lod || "LOD300",
+      modelVersion:
+        detail.version ||
+        detail.modelVersion ||
+        partial.metadata?.modelVersion ||
+        "",
+      versionName:
+        detail.versionName ||
+        detail.versionLabel ||
+        partial.metadata?.versionName ||
+        "",
+      uploadedBy:
+        detail.uploadedBy ||
+        detail.uploadUserName ||
+        detail.createdBy ||
+        detail.updatedBy ||
+        partial.metadata?.uploadedBy ||
+        "",
+      updatedAt:
+        detail.updatedAt ||
+        detail.uploadedAt ||
+        detail.createdAt ||
+        partial.metadata?.updatedAt ||
+        "",
+      changeLog:
+        detail.changeLog ||
+        detail.changeRemark ||
+        detail.remark ||
+        detail.description ||
+        partial.metadata?.changeLog ||
+        "",
       ...defaultMetadata,
       ...(partial.metadata || {})
     },

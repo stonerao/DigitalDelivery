@@ -140,6 +140,7 @@ function buildPlaneItems(items = [], isCamera = false) {
       item,
       isCamera,
       label: getMarkerLabel(item, isCamera),
+      iconUrl: item?.style?.iconUrl || "",
       showLabel: isCamera ? item?.style?.showLabel === true : true,
       style: worldToPlane(resolveAnchorPosition(item))
     }))
@@ -323,7 +324,12 @@ watch(
         @click.stop="handleMarkerClick(entry)"
         @contextmenu.stop.prevent
       >
-        <span class="dd-plane-marker__dot" />
+        <span
+          class="dd-plane-marker__dot"
+          :class="{ 'has-icon': entry.iconUrl }"
+        >
+          <img v-if="entry.iconUrl" :src="entry.iconUrl" :alt="entry.label" />
+        </span>
         <span v-if="entry.showLabel" class="dd-plane-marker__label">
           {{ entry.label }}
         </span>
@@ -339,7 +345,10 @@ watch(
         @click.stop="handleMarkerClick(entry)"
         @contextmenu.stop.prevent
       >
-        <span class="dd-plane-marker__camera"><Camera /></span>
+        <span class="dd-plane-marker__camera">
+          <img v-if="entry.iconUrl" :src="entry.iconUrl" :alt="entry.label" />
+          <Camera v-else />
+        </span>
         <span v-if="entry.showLabel" class="dd-plane-marker__label">
           {{ entry.label }}
         </span>
@@ -436,11 +445,29 @@ watch(
 }
 
 .dd-plane-marker__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 10px;
   height: 10px;
+  overflow: hidden;
   background: #22c55e;
   border: 2px solid #fff;
   border-radius: 999px;
+}
+
+.dd-plane-marker__dot img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.dd-plane-marker__dot.has-icon {
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .dd-plane-marker__camera {
@@ -450,6 +477,12 @@ watch(
   width: 16px;
   height: 16px;
   color: #fff;
+}
+
+.dd-plane-marker__camera img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
 }
 
 .dd-plane-marker__label {
