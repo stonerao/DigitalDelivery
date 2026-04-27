@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from "vue";
+import { VIEWER_MATERIAL_THEME_OPTIONS } from "../services/viewerToolbarConfig";
 
 defineOptions({
   name: "SceneOverviewPanel"
@@ -163,6 +164,14 @@ const activeLodLabel = computed(() => {
   return lod?.level || lod?.name || props.selectedLodId;
 });
 
+const materialThemeLabel = computed(() => {
+  return (
+    VIEWER_MATERIAL_THEME_OPTIONS.find(
+      item => item.value === props.materialTheme
+    )?.label || "默认"
+  );
+});
+
 const selectedLabel = computed(() => {
   return firstText(
     props.selectedObjectInfo?.name,
@@ -280,7 +289,7 @@ const statusCards = computed(() => [
         </div>
         <div class="dd-setting-row">
           <span>材质主题</span>
-          <strong>{{ materialTheme || "默认" }}</strong>
+          <strong>{{ materialThemeLabel }}</strong>
         </div>
         <div class="dd-setting-row">
           <span>LOD</span>

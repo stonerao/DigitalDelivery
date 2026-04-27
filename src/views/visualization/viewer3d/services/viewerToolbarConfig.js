@@ -31,6 +31,7 @@ export const VIEWER_MEASUREMENT_MODE_OPTIONS = [
 ];
 
 export const VIEWER_MATERIAL_THEME_OPTIONS = [
+  { label: "基础纹理", value: "textured-basic" },
   { label: "线框", value: "wireframe" },
   { label: "实体", value: "basic" },
   { label: "渲染", value: "original" }

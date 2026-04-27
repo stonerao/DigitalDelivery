@@ -184,12 +184,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <div class="mb-2 flex items-center justify-between">
-      <span class="font-semibold text-sm">模型结构</span>
-      <el-button size="small" link @click="emit('refresh-tree')"
-        >刷新</el-button
+  <div class="dd-inspector-module">
+    <div class="dd-inspector-module__head">
+      <span class="dd-inspector-module__title">模型结构</span>
+      <button
+        type="button"
+        class="dd-inspector-module__text-action"
+        @click="emit('refresh-tree')"
       >
+        刷新
+      </button>
     </div>
 
     <el-input
@@ -197,14 +201,14 @@ onBeforeUnmount(() => {
       size="small"
       clearable
       placeholder="搜索模型/构件名称"
-      class="mb-2"
+      class="dd-inspector-module__field"
       @update:model-value="emit('update:treeFilterText', $event)"
     />
     <el-select
       v-if="modelTypeOptions.length > 1"
       :model-value="modelTypeFilter"
       size="small"
-      class="mb-2 w-full"
+      class="dd-inspector-module__field w-full"
       placeholder="按模型类型筛选"
       @update:model-value="emit('update:modelTypeFilter', $event)"
     >
@@ -275,13 +279,13 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </el-tree-v2>
-      <div v-else class="text-xs text-[var(--el-text-color-secondary)]">
+      <div v-else class="dd-tree-empty">
         未加载结构（请先加载模型）
       </div>
     </div>
 
-    <div v-if="selectedTreeNode" class="mt-3">
-      <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
+    <div v-if="selectedTreeNode" class="dd-selection-panel">
+      <div class="dd-selection-panel__title">
         已选：{{ selectedTreeNode.name }}
         <span v-if="selectedTreeNode.isMesh" class="ml-1">(Mesh)</span>
       </div>
@@ -372,10 +376,49 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.dd-inspector-module {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.dd-inspector-module__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.dd-inspector-module__title {
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 22px;
+  color: #172033;
+}
+
+.dd-inspector-module__text-action {
+  padding: 0;
+  font-size: 13px;
+  color: #64748b;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.dd-inspector-module__text-action:hover {
+  color: #0b73ff;
+}
+
+.dd-inspector-module__field {
+  margin-bottom: 9px;
+}
+
 .dd-tree {
   flex: 1;
   min-height: 220px;
   overflow: auto;
+  padding-top: 8px;
 }
 
 .dd-structure-node {
@@ -399,5 +442,23 @@ onBeforeUnmount(() => {
   flex: none;
   gap: 4px;
   align-items: center;
+}
+
+.dd-tree-empty {
+  padding: 18px 4px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dd-selection-panel {
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid #e5edf7;
+}
+
+.dd-selection-panel__title {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #64748b;
 }
 </style>

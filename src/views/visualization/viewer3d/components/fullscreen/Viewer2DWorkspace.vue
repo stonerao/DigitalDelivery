@@ -592,7 +592,7 @@ function handleNavigationNodeContextmenu(...args) {
 .dd-side-panel__content {
   min-width: 0;
   height: 100%;
-  padding: 16px;
+  padding: 18px;
   overflow: hidden auto;
   border-radius: 15px;
 }
@@ -658,22 +658,145 @@ function handleNavigationNodeContextmenu(...args) {
 
 .dd-panel-stack {
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .dd-side-panel__content :deep(.el-card) {
-  background: rgb(255 255 255 / 74%);
-  border-color: rgb(226 232 240 / 88%);
-  border-radius: 14px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .dd-side-panel__content :deep(.el-card__header) {
-  padding: 14px 16px;
-  border-bottom-color: rgb(226 232 240 / 82%);
+  padding: 0 0 10px;
+  border-bottom: 0;
 }
 
 .dd-side-panel__content :deep(.el-card__body) {
-  padding: 16px;
+  padding: 0;
+}
+
+.dd-side-panel__content :deep(.font-semibold.text-sm),
+.dd-side-panel__content :deep(.text-sm.font-semibold),
+.dd-side-panel__content :deep(.font-semibold) {
+  color: #172033;
+  font-weight: 760;
+}
+
+.dd-side-panel__content :deep(.text-\[var\(--el-text-color-secondary\)\]),
+.dd-side-panel__content :deep(.el-tree-node__label) {
+  color: #718096;
+}
+
+.dd-side-panel__content :deep(.el-input__wrapper),
+.dd-side-panel__content :deep(.el-select__wrapper) {
+  min-height: 32px;
+  background: rgb(255 255 255 / 72%);
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px #d9e2ee inset;
+}
+
+.dd-side-panel__content :deep(.el-input__wrapper:hover),
+.dd-side-panel__content :deep(.el-select__wrapper:hover),
+.dd-side-panel__content :deep(.el-input__wrapper.is-focus),
+.dd-side-panel__content :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #9fc8ff inset;
+}
+
+.dd-side-panel__content :deep(.el-input__inner),
+.dd-side-panel__content :deep(.el-select__placeholder),
+.dd-side-panel__content :deep(.el-select__selected-item) {
+  font-size: 13px;
+}
+
+.dd-side-panel__content :deep(.el-button.is-link) {
+  height: 28px;
+  padding: 0 2px;
+  font-weight: 650;
+  color: #64748b;
+}
+
+.dd-side-panel__content :deep(.el-button.is-link:hover) {
+  color: #0b73ff;
+}
+
+.dd-side-panel__content :deep(.el-button:not(.is-link)) {
+  border-color: #d9e2ee;
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.dd-side-panel__content :deep(.el-button--primary) {
+  border-color: #0b73ff;
+  background: #0b73ff;
+}
+
+.dd-side-panel__content :deep(.el-tree),
+.dd-side-panel__content :deep(.el-vl__wrapper) {
+  color: #334155;
+  background: transparent;
+}
+
+.dd-side-panel__content :deep(.el-tree-node__content),
+.dd-side-panel__content :deep(.el-tree-v2__node) {
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+.dd-side-panel__content :deep(.el-tree-node__content:hover),
+.dd-side-panel__content :deep(.el-tree-v2__node:hover) {
+  background: #f2f7ff;
+}
+
+.dd-side-panel__content :deep(.el-tree--highlight-current .el-tree-node.is-current > .el-tree-node__content),
+.dd-side-panel__content :deep(.el-tree-v2__node.is-current) {
+  color: #0b73ff;
+  background: #edf5ff;
+}
+
+.dd-side-panel__content :deep(.rounded.border) {
+  background: transparent;
+  border-color: #e5edf7;
+  border-radius: 10px;
+}
+
+.dd-side-panel__content :deep(.cursor-pointer.rounded.border) {
+  background: rgb(255 255 255 / 42%);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.dd-side-panel__content :deep(.cursor-pointer.rounded.border:hover) {
+  background: #f6faff;
+  border-color: #c6dcff;
+}
+
+.dd-side-panel__content :deep(.el-tag) {
+  border-radius: 999px;
+}
+
+.dd-side-panel__content :deep(.el-empty) {
+  padding: 42px 0;
+}
+
+.dd-side-panel__content :deep(.el-empty__description p) {
+  color: #94a3b8;
+}
+
+.dd-side-panel__content :deep(.el-segmented) {
+  --el-segmented-bg-color: #f3f7fc;
+  --el-segmented-item-selected-bg-color: #ffffff;
+  --el-segmented-item-selected-color: #0b73ff;
+  padding: 3px;
+  border: 1px solid #e5edf7;
+  border-radius: 9px;
+}
+
+.dd-side-panel__content :deep(.el-scrollbar__view) {
+  min-height: 100%;
 }
 
 @media (width <= 1200px) {

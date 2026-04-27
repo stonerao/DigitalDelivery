@@ -117,7 +117,7 @@ defineExpose({
         @refresh="emit('refresh-navigation-map')"
       />
 
-      <div class="rounded border border-[var(--el-border-color)] p-3">
+      <section class="dd-nav-section rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 flex items-center justify-between gap-2">
           <div class="text-sm font-semibold">导航</div>
         </div>
@@ -153,9 +153,9 @@ defineExpose({
           </template>
         </el-tree>
         <el-empty v-else description="未加载模型数据" :image-size="56" />
-      </div>
+      </section>
 
-      <div class="rounded border border-[var(--el-border-color)] p-3">
+      <section class="dd-nav-section rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 text-sm font-semibold">快速定位</div>
         <el-select
           :model-value="selectedSystemNodeId"
@@ -214,9 +214,9 @@ defineExpose({
             仅看当前设备
           </el-button>
         </div>
-      </div>
+      </section>
 
-      <div class="rounded border border-[var(--el-border-color)] p-3">
+      <section class="dd-nav-section rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 text-sm font-semibold">分层显示树</div>
         <div class="mb-2 text-xs text-[var(--el-text-color-secondary)]">
           勾选需要显示的系统或设备，支持批量开关子层级。
@@ -233,9 +233,9 @@ defineExpose({
           @check="emit('layer-tree-check')"
         />
         <el-empty v-else description="暂无模型分层数据" :image-size="56" />
-      </div>
+      </section>
 
-      <div class="rounded border border-[var(--el-border-color)] p-3">
+      <section class="dd-nav-section rounded border border-[var(--el-border-color)] p-3">
         <div class="mb-2 text-sm font-semibold">显示控制</div>
         <div class="flex flex-wrap gap-2">
           <el-button
@@ -270,7 +270,7 @@ defineExpose({
         <div class="mt-2 text-xs text-[var(--el-text-color-secondary)]">
           当前显示范围：{{ displayModeText }}
         </div>
-      </div>
+      </section>
     </div>
   </el-scrollbar>
 </template>
@@ -287,5 +287,13 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dd-nav-section {
+  background: transparent;
+}
+
+.dd-nav-section + .dd-nav-section {
+  margin-top: 2px;
 }
 </style>

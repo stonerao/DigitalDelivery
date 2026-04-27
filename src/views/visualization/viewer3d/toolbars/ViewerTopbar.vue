@@ -1,6 +1,11 @@
 <script setup>
 import { computed } from "vue";
-import { QuestionFilled, Setting } from "@element-plus/icons-vue";
+import {
+  Back,
+  CaretBottom,
+  QuestionFilled,
+  Setting
+} from "@element-plus/icons-vue";
 
 defineOptions({
   name: "ViewerTopbar"
@@ -101,13 +106,13 @@ const shortcutGroups = [
   <header class="dd-topbar">
     <div class="dd-topbar__left">
       <button type="button" class="dd-topbar__back" @click="emit('back')">
-        <span class="dd-topbar__back-icon">‹</span>
+        <el-icon class="dd-topbar__back-icon"><Back /></el-icon>
         返回
       </button>
       <span class="dd-topbar__divider" />
       <div class="dd-topbar__title" :title="titleText">
         <span>{{ titleText }}</span>
-        <span class="dd-topbar__chevron">⌄</span>
+        <el-icon class="dd-topbar__chevron"><CaretBottom /></el-icon>
       </div>
       <span class="dd-topbar__mode">{{ modelModeText }}</span>
       <span class="dd-topbar__status"><i />在线</span>
@@ -243,7 +248,7 @@ const shortcutGroups = [
 }
 
 .dd-topbar__left {
-  gap: 14px;
+  gap: 10px;
 }
 
 .dd-topbar__right {
@@ -265,12 +270,14 @@ const shortcutGroups = [
 
 .dd-topbar__back {
   display: inline-flex;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
+  justify-content: center;
   height: 34px;
-  padding: 0 8px;
+  padding: 0 10px;
   font-size: 14px;
   font-weight: 650;
+  line-height: 34px;
   color: #334155;
   cursor: pointer;
   background: transparent;
@@ -283,8 +290,13 @@ const shortcutGroups = [
 }
 
 .dd-topbar__back-icon {
-  font-size: 24px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 14px;
+  line-height: 0;
 }
 
 .dd-topbar__divider {
@@ -295,12 +307,14 @@ const shortcutGroups = [
 
 .dd-topbar__title {
   display: inline-flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
+  height: 34px;
   max-width: min(34vw, 420px);
   overflow: hidden;
   font-size: 15px;
   font-weight: 760;
+  line-height: 34px;
   white-space: nowrap;
 }
 
@@ -310,16 +324,26 @@ const shortcutGroups = [
 }
 
 .dd-topbar__chevron {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  font-size: 12px;
+  line-height: 0;
   color: #64748b;
 }
 
 .dd-topbar__mode {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 28px;
   padding: 0 12px;
   font-size: 12px;
   font-weight: 700;
+  line-height: 28px;
   color: #0b73ff;
   background: #edf5ff;
   border: 1px solid #d7e8ff;

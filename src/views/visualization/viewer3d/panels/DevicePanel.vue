@@ -42,16 +42,23 @@ function getStatusTagType(status = "") {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div class="dd-inspector-module">
+    <div class="dd-inspector-module__head">
+      <span class="dd-inspector-module__title">设备联动</span>
+      <span class="dd-inspector-module__count">
+        {{ filteredSceneDevices.length }}
+      </span>
+    </div>
+
     <el-input
       :model-value="deviceKeyword"
       clearable
       placeholder="搜索设备名称/类型/路径"
-      class="mb-3"
+      class="dd-inspector-module__field"
       @update:model-value="emit('update:deviceKeyword', $event)"
     />
 
-    <div class="mb-3 text-xs text-[var(--el-text-color-secondary)]">
+    <div class="dd-inspector-module__hint">
       点击列表项可在场景中高亮并定位到对应构件。
     </div>
 
@@ -60,7 +67,7 @@ function getStatusTagType(status = "") {
         <div
           v-for="item in filteredSceneDevices"
           :key="item.uuid"
-          class="rounded border px-3 py-2 transition cursor-pointer"
+          class="dd-list-row rounded border px-3 py-2 transition cursor-pointer"
           :class="
             item.uuid === selectedDeviceUuid
               ? 'border-[var(--el-color-primary)] bg-[var(--el-color-primary-light-9)]'
@@ -118,3 +125,52 @@ function getStatusTagType(status = "") {
     </el-scrollbar>
   </div>
 </template>
+
+<style scoped>
+.dd-inspector-module {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.dd-inspector-module__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.dd-inspector-module__title {
+  font-size: 15px;
+  font-weight: 760;
+  color: #172033;
+}
+
+.dd-inspector-module__count {
+  min-width: 28px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 22px;
+  color: #0b73ff;
+  text-align: center;
+  background: #edf5ff;
+  border-radius: 999px;
+}
+
+.dd-inspector-module__field {
+  margin-bottom: 10px;
+}
+
+.dd-inspector-module__hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dd-list-row {
+  border-radius: 10px;
+}
+</style>

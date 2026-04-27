@@ -46,21 +46,24 @@ function formatValue(item) {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <div class="mb-3 flex items-center justify-between gap-2">
-      <span class="font-semibold text-sm">测量结果</span>
-      <div class="flex items-center gap-2">
-        <el-button size="small" link @click="emit('export-records')">
+  <div class="dd-inspector-module">
+    <div class="dd-inspector-module__head">
+      <span class="dd-inspector-module__title">测量结果</span>
+      <div class="dd-inspector-module__actions">
+        <button
+          type="button"
+          class="dd-text-action"
+          @click="emit('export-records')"
+        >
           导出
-        </el-button>
-        <el-button
-          size="small"
-          link
-          type="danger"
+        </button>
+        <button
+          type="button"
+          class="dd-text-action is-danger"
           @click="emit('clear-records')"
         >
           清空
-        </el-button>
+        </button>
       </div>
     </div>
 
@@ -68,11 +71,11 @@ function formatValue(item) {
       :model-value="measurementMode"
       :options="measurementModeOptions"
       size="small"
-      class="mb-3"
+      class="dd-inspector-module__segmented"
       @change="emit('update:measurement-mode', $event)"
     />
 
-    <div class="mb-3 text-xs text-[var(--el-text-color-secondary)]">
+    <div class="dd-inspector-module__hint">
       距离、折线、夹角、面积都在同一套结果模型下管理，右键、双击或 Enter
       完成当前绘制。
     </div>
@@ -82,7 +85,7 @@ function formatValue(item) {
         <div
           v-for="item in measurementRecords"
           :key="item.id"
-          class="rounded border border-[var(--el-border-color)] px-3 py-2"
+          class="dd-list-row rounded border border-[var(--el-border-color)] px-3 py-2"
         >
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0">
@@ -123,3 +126,64 @@ function formatValue(item) {
     </el-scrollbar>
   </div>
 </template>
+
+<style scoped>
+.dd-inspector-module {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.dd-inspector-module__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.dd-inspector-module__title {
+  font-size: 15px;
+  font-weight: 760;
+  color: #172033;
+}
+
+.dd-inspector-module__actions {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.dd-text-action {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: #64748b;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.dd-text-action:hover {
+  color: #0b73ff;
+}
+
+.dd-text-action.is-danger:hover {
+  color: #dc2626;
+}
+
+.dd-inspector-module__segmented {
+  margin-bottom: 12px;
+}
+
+.dd-inspector-module__hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #94a3b8;
+}
+
+.dd-list-row {
+  border-radius: 10px;
+}
+</style>

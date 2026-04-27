@@ -79,10 +79,10 @@ function itemIconUrl(item) {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <div class="mb-3 flex items-center justify-between gap-3">
-      <span class="font-semibold text-sm">{{ title }}</span>
-      <div class="flex items-center gap-2">
+  <div class="dd-inspector-module">
+    <div class="dd-inspector-module__head">
+      <span class="dd-inspector-module__title">{{ title }}</span>
+      <div class="dd-inspector-module__actions">
         <el-switch
           :model-value="visible"
           inline-prompt
@@ -90,13 +90,13 @@ function itemIconUrl(item) {
           inactive-text="隐"
           @update:model-value="emit('toggle-visible', $event)"
         />
-        <el-button size="small" type="primary" @click="emit('add-item')">
+        <el-button size="small" type="primary" plain @click="emit('add-item')">
           新增
         </el-button>
       </div>
     </div>
 
-    <div class="mb-3 text-xs text-[var(--el-text-color-secondary)]">
+    <div class="dd-inspector-module__hint">
       {{
         kind === "camera"
           ? "点击场景摄像头可查看视频接入信息。"
@@ -109,7 +109,7 @@ function itemIconUrl(item) {
         <div
           v-for="item in items"
           :key="item.id"
-          class="rounded border px-3 py-2 transition cursor-pointer"
+          class="dd-list-row rounded border px-3 py-2 transition cursor-pointer"
           :class="
             item.id === selectedId
               ? 'border-[var(--el-color-primary)] bg-[var(--el-color-primary-light-9)]'
@@ -169,6 +169,42 @@ function itemIconUrl(item) {
 </template>
 
 <style scoped>
+.dd-inspector-module {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.dd-inspector-module__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  margin-bottom: 10px;
+}
+
+.dd-inspector-module__title {
+  font-size: 15px;
+  font-weight: 760;
+  color: #172033;
+}
+
+.dd-inspector-module__actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dd-inspector-module__hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.dd-list-row {
+  border-radius: 10px;
+}
+
 .dd-anchor-list-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -178,10 +214,10 @@ function itemIconUrl(item) {
   height: 36px;
   overflow: hidden;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
+  color: #64748b;
+  background: #f3f7fc;
+  border: 1px solid #e5edf7;
+  border-radius: 9px;
 }
 
 .dd-anchor-list-icon img {
